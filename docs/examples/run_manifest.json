@@ -1,0 +1,17 @@
+{
+  "origin": "real",
+  "origins": {
+    "disease": "real",
+    "evidence": "real",
+    "ranked": "real",
+    "scoring_meta": "real",
+    "complexes": "real",
+    "epitopes": "real",
+    "residues": "real",
+    "interface_meta": "real",
+    "specs_manifest": "real"
+  },
+  "note": "All layers were fetched live from Open Targets, UniProt, RCSB PDB, ChEMBL and ClinicalTrials.gov during this run. Requests are disk-cached, so a re-run replays identical payloads without re-querying.",
+  "fetched_by": "indication2binder 0.1.0",
+  "recorded_at": "2026-09-22T17:18:02+00:00"
+}
