@@ -54,7 +54,8 @@ LAYERS: dict[str, list[str]] = {
     "residues": ["stage4_interface_residues.csv", "interface_residues.csv"],
     "interface_meta": ["stage4_interface_meta.json"],
     "specs_manifest": ["stage5_specs/manifest.json"],
-    "binders": ["stage6_binders.json"],
+    "designs": ["stage6_designs.json"],
+    "reference_binders": ["reference_binders.json", "stage6_binders.json"],
     "run_manifest": ["run_manifest.json", "provenance.json"],
     "design_run": ["design_run.json"],
     "candidates": ["candidates.json", "candidates.csv"],
@@ -381,6 +382,52 @@ def svg_structure(projection: dict, width: int = 820, height: int = 380) -> str:
     )
     parts.append("</svg>")
     return "".join(parts)
+
+
+def viewer3d(projection: dict, vid: str, height: int = 400) -> str:
+    """A rotatable 3-D backbone view, plus the flat SVG as the print fallback.
+
+    The geometry is the persisted principal-axis frame from stage 6, embedded
+    as JSON and drawn on a canvas by the report's own code. There is no viewer
+    library to fetch, so the file stays self-contained and works offline; the
+    cost is that this draws a backbone trace, not cartoon ribbons or a
+    molecular surface. For publication-quality rendering, open the deposited
+    entry in PyMOL, ChimeraX or Mol*.
+    """
+    chains = projection.get("chains") or []
+    if not any(c.get("xyz") for c in chains):
+        # Older records carry only the flat projection: draw that rather than
+        # claim a 3-D view the data cannot support.
+        return svg_structure(projection)
+
+    payload = {
+        "radius": projection.get("radius") or 1.0,
+        "chains": [
+            {
+                "role": c["role"],
+                "chain": c["chain"],
+                "xyz": c["xyz"],
+                "residues": c.get("residues") or [],
+                "flags": c.get("flags") or [],
+            }
+            for c in chains
+        ],
+    }
+    data = json.dumps(payload, separators=(",", ":"))
+    return (
+        f'<div class="viewer3d" data-payload="{vid}-data" style="height:{height}px">'
+        f'<canvas id="{vid}" height="{height}"></canvas>'
+        f'<div class="v3d-hint">drag to rotate &middot; scroll to zoom &middot; '
+        f'double-click to reset</div>'
+        f'<div class="v3d-legend">'
+        f'<span><i class="sw" style="background:#8250df"></i>binder</span>'
+        f'<span><i class="sw" style="background:#8c959f"></i>target</span>'
+        f'<span><i class="dot" style="background:#0969da"></i>epitope</span>'
+        f'<span><i class="dot" style="background:#cf222e"></i>hotspot</span>'
+        f"</div></div>"
+        f'<script type="application/json" id="{vid}-data">{data}</script>'
+        f'<div class="print-only">{svg_structure(projection)}</div>'
+    )
 
 
 def svg_residue_bars(rows: list[dict], width: int = 820, top: int = 16) -> str:
@@ -1047,23 +1094,168 @@ def sec_specs(run: dict) -> str:
                 note=note, sub=f'{sm.get("n_specs")} written')
 
 
-def sec_binders(run: dict) -> str:
-    """Existing binders of these targets - none produced by this pipeline."""
-    rec = run.get("binders")
+def sec_designs(run: dict) -> str:
+    """Binders this pipeline's own BindCraft2 campaigns produced, if any."""
+    rec = run.get("designs")
     if not rec:
         return absent_card(
-            "Existing binders",
-            "No stage 6 binder record was found, so no existing binder of these "
-            "targets is shown. Run `ind2b stage6` to collect them.")
+            "Designed binders",
+            "No stage 6 design record was found. Run `ind2b stage6` once a "
+            "BindCraft2 campaign has produced output; until then this pipeline "
+            "has designed nothing and nothing is shown in its place.")
 
+    if not rec.get("campaigns"):
+        return card("Designed binders",
+                    f'<p class="verdict bad"><strong>No binder has been designed.'
+                    f'</strong> {esc(rec.get("no_campaign_note"))}</p>'
+                    f'<p class="note">Searched: '
+                    f'{", ".join(f"<code>{esc(r)}</code>" for r in rec.get("searched_roots") or [])}. '
+                    f'This section fills in automatically once a campaign writes '
+                    f'results there &mdash; the report reads the campaign\'s own '
+                    f'tables rather than anything restated by hand.</p>')
+
+    body = f'<p class="note">{esc(rec.get("acceptance_meaning"))}</p>'
+    n_ladder = sum(c.get("n_on_ladder") or 0 for c in rec["campaigns"])
+    if n_ladder:
+        body += (
+            f'<p class="verdict warn"><strong>{n_ladder} accepted design(s) ran on '
+            f'the desperation ladder.</strong> Their attempt used settings easier '
+            f'than the campaign asked for (an <code>initial_guess</code>, relaxed '
+            f'<code>target_flexibility</code>, a different '
+            f'<code>validation_model</code>, or raised <code>design_recycles</code>), '
+            f'so their scores are not comparable with the rest and are flagged in '
+            f'the table.</p>')
+
+    for camp in rec["campaigns"]:
+        stages = camp.get("stages_present") or {}
+        stats = [
+            ("attempts", num(camp.get("n_attempts"), 0), "gradient-design attempts"),
+            ("scored", num(camp.get("n_candidates_scored"), 0), "ProteinMPNN candidates"),
+            ("accepted", num(camp.get("n_accepted"), 0), "passed configured filters"),
+        ]
+        block = (f'<h4><code>{esc(camp.get("campaign_name") or camp["project_folder"])}'
+                 f'</code></h4>' + stat_row(stats))
+        if not stages.get("ranked"):
+            block += ('<p class="absent">No ranked table: this campaign has not '
+                      'written an accepted design. A stage folder appears only '
+                      'once its first result exists, so its absence means the '
+                      'campaign did not get that far &mdash; not that the target '
+                      'is undesignable.</p>')
+        if camp.get("designs_note"):
+            block += f'<p class="absent">{esc(camp["designs_note"])}</p>'
+        if camp.get("failed_filter_tally"):
+            block += ("<h5>Why candidates were rejected</h5>"
+                      '<p class="note">Counts of failed filters across scored '
+                      'candidates. &ldquo;not measured&rdquo; is different from a '
+                      'low score.</p>'
+                      + table(f'tbl-ff-{slug(camp["project_folder"])}',
+                              [("failed filter", "text"), ("candidates", "num")],
+                              [[esc(k), num(v, 0)]
+                               for k, v in camp["failed_filter_tally"].items()],
+                              filter_label="Filter checks"))
+        if camp.get("match_note"):
+            block += f'<p class="absent">{esc(camp["match_note"])}</p>'
+
+        designs = camp.get("designs") or []
+        if designs:
+            headers = [("rank", "num"), ("design", "text"), ("length", "num"),
+                       ("requested hotspots", "num"), ("interface res", "num"),
+                       ("flags", "text")]
+            rows, details = [], []
+            for d in designs:
+                eng = d.get("vs_requested_epitope") or {}
+                flags = []
+                if d.get("ran_on_desperation_ladder"):
+                    flags.append(pill("easier task", "warn"))
+                if d.get("failed_filters"):
+                    flags.append(pill("filters noted", "warn"))
+                rows.append([
+                    num(d.get("rank"), 0),
+                    f'<code>{trunc(d.get("design"), 40)}</code>',
+                    num(d.get("binder_length"), 0),
+                    (pct(eng.get("fraction_hotspots_engaged"))
+                     if eng.get("comparable") else "&mdash;"),
+                    num(eng.get("n_interface_residues"), 0)
+                    if eng.get("comparable") else "&mdash;",
+                    " ".join(flags) or "",
+                ])
+                dd = ""
+                if d.get("binder_sequence"):
+                    seq = d["binder_sequence"]
+                    dd += ("<h5>Binder sequence</h5>"
+                           f'<pre class="code">{esc(seq)}</pre>'
+                           f'{copy_btn(seq, "copy sequence")}')
+                if eng.get("comparable"):
+                    dd += kv([
+                        ("requested hotspots engaged",
+                         f'<code>{esc(",".join(eng.get("hotspots_engaged") or []) or "none")}</code>'),
+                        ("requested hotspots missed",
+                         f'<code>{esc(",".join(eng.get("hotspots_missed") or []) or "none")}</code>'),
+                        ("target-side interface residues",
+                         f'<code>{esc(",".join(d.get("interface_target_residues") or []))}</code>'),
+                    ])
+                else:
+                    dd += (f'<p class="absent">{esc(eng.get("reason", "no comparison "
+                           "with the requested epitope was possible"))}.</p>')
+                if d.get("ran_on_desperation_ladder"):
+                    dd += (f'<p class="absent"><strong>Ran on the desperation '
+                           f'ladder.</strong> Autotuned settings: '
+                           f'<code>{esc(d.get("autotuned"))}</code>. This attempt '
+                           f'was given an easier problem than the campaign '
+                           f'specified, so its metrics are not comparable with '
+                           f'designs that ran the task as asked.</p>')
+                if d.get("failed_filters"):
+                    dd += kv([("filters noted", esc(d["failed_filters"]))])
+                metrics = {k: v for k, v in (d.get("metrics") or {}).items()
+                           if v is not None}
+                if metrics:
+                    dd += ("<h5>Reported metrics</h5>"
+                           '<p class="note">Every metric column the campaign '
+                           'wrote, blanks omitted rather than shown as zero. '
+                           '<code>rank</code> is a position in one ranking, not a '
+                           'probability of experimental success.</p>'
+                           + table(f'tbl-dm-{slug(d.get("design"))}',
+                                   [("metric", "text"), ("value", "num")],
+                                   [[esc(k), num(v, 4) if isinstance(v, float)
+                                     else esc(v)] for k, v in metrics.items()],
+                                   filter_label="Filter metrics"))
+                if d.get("structure_file"):
+                    dd += kv([("structure",
+                               f'<code>{esc(d["structure_file"])}</code> '
+                               f'<span class="dim">(in the campaign folder; '
+                               f'B-factors carry per-residue pLDDT on a 0-100 '
+                               f'scale, not experimental B-factors)</span>')])
+                details.append(dd)
+            block += table(f'tbl-designs-{slug(camp["project_folder"])}',
+                           headers, rows, details=details,
+                           filter_label="Filter designs")
+        body += f'<div class="example">{block}</div>'
+
+    return card("Designed binders", body,
+                sub=f'{rec.get("n_accepted_total")} accepted across '
+                    f'{rec.get("n_campaigns")} campaign(s)')
+
+
+def sec_binders(run: dict) -> str:
+    """Existing binders of these targets - none produced by this pipeline."""
+    rec = run.get("reference_binders")
+    if not rec:
+        return ""  # nothing to show, and nothing to stand in for it
+
+    designed_here = bool((run.get("designs") or {}).get("n_accepted_total"))
     lead = (
-        '<p class="verdict warn"><strong>None of these binders came from this '
-        'pipeline.</strong> Every molecule below already exists &mdash; a designed '
-        'binder deposited in the PDB, or a clinical antibody. They are shown '
-        'because an existing binder against the same surface is evidence that '
-        'the surface is <em>bindable</em>; that is not evidence that a new '
-        'binder against it will have useful affinity or specificity.</p>'
+        '<p class="verdict warn"><strong>Reference molecules, not pipeline '
+        'output.</strong> Every binder below already exists &mdash; a designed '
+        'binder deposited in the PDB, or a clinical antibody. '
+        + ('They are shown alongside this run\'s own designs for comparison. '
+           if designed_here else
+           'They are shown because this run has designed nothing, and an existing '
+           'binder against the same surface is at least evidence that the surface '
+           'is <em>bindable</em> &mdash; which is not evidence that a new binder '
+           'against it will have useful affinity or specificity.</p>')
     )
+    if designed_here:
+        lead += ('Do not read them as this pipeline\'s results.</p>')
 
     # Mini-binder-scale designs are the ones comparable to a BindCraft2 output.
     minis = [
@@ -1131,7 +1323,7 @@ def sec_binders(run: dict) -> str:
             f'<div class="card-head"><h4 style="margin:0">{headline}</h4>'
             f'<span class="sub">{badge}</span></div>'
             + (f'<p class="note">{note}</p>' if note else "")
-            + svg_structure(b["projection"])
+            + viewer3d(b["projection"], f'v3d-{slug(t["symbol"])}-{slug(b["entry_id"])}')
             + f'<p class="caption">Backbone schematic of <code>{esc(b["entry_id"])}</code> '
               f'at {num(b.get("resolution"), 2)}&#8491;, projected onto the complex\'s two '
               f'principal axes. Lines trace C&alpha; positions only &mdash; this is not a '
@@ -1252,7 +1444,7 @@ def sec_binders(run: dict) -> str:
                          [("target", "text"), ("drug", "text"), ("modality", "text"),
                           ("stage", "text")],
                          clinical_rows, filter_label="Filter drugs"))
-    return card("Existing binders for these targets", body,
+    return card("Reference binders (not designed here)", body,
                 note=esc(rec.get("not_our_designs")),
                 sub=f'{rec.get("n_with_designed")} of {rec.get("n_targets")} '
                     f'targets have a designed binder in the PDB')
@@ -1366,6 +1558,20 @@ tr.detail{display:none}
 tr.detail.open{display:table-row}
 tr.detail td{background:#fbfcfd;border-bottom:1px solid var(--border)}
 .detail-in{padding:6px 2px 10px}
+.viewer3d{position:relative;background:#fff;border:1px solid var(--border);
+border-radius:6px;margin:6px 0 4px;overflow:hidden}
+.viewer3d canvas{display:block;width:100%;cursor:grab;touch-action:none}
+.viewer3d canvas:active{cursor:grabbing}
+.v3d-hint{position:absolute;bottom:6px;right:10px;font-size:11.5px;
+color:var(--muted);background:rgba(255,255,255,.82);padding:2px 7px;
+border-radius:99px;pointer-events:none}
+.v3d-legend{position:absolute;top:8px;left:10px;display:flex;gap:12px;
+font-size:11.5px;color:var(--muted);background:rgba(255,255,255,.82);
+padding:3px 9px;border-radius:99px;pointer-events:none}
+.v3d-legend i{display:inline-block;margin-right:4px;vertical-align:middle}
+.v3d-legend .sw{width:14px;height:3px;border-radius:2px}
+.v3d-legend .dot{width:8px;height:8px;border-radius:50%}
+.print-only{display:none}
 .dim{color:var(--muted)}
 .ok-text{color:var(--ok);font-weight:550}
 .caption{color:var(--muted);font-size:12.5px;margin:2px 0 10px;max-width:70ch}
@@ -1399,6 +1605,7 @@ font-size:12.5px}
 @media (max-width:720px){.kv-row{grid-template-columns:1fr}
 .top-in,main{padding-left:14px;padding-right:14px}}
 @media print{header.top{position:static}nav{display:none}
+.viewer3d{display:none}.print-only{display:block}
 .card{break-inside:avoid;box-shadow:none}tr.detail{display:table-row}}
 """
 
@@ -1504,8 +1711,133 @@ function navInit(){
   window.addEventListener('scroll',onScroll,{passive:true});
   onScroll();
 }
+
+function initViewers(){
+  var boxes = document.querySelectorAll('.viewer3d');
+  for (var bi=0; bi<boxes.length; bi++) initViewer(boxes[bi]);
+}
+function initViewer(box){
+  var canvas = box.querySelector('canvas');
+  var node = document.getElementById(box.getAttribute('data-payload'));
+  if(!canvas || !node) return;
+  var data;
+  try{ data = JSON.parse(node.textContent); }catch(e){ return; }
+
+  // rotation matrix, row-major; identity means the stored principal-axis view
+  var R = [1,0,0, 0,1,0, 0,0,1];
+  var zoom = 1, drag = null;
+
+  function mul(a,b){
+    var o = new Array(9);
+    for(var i=0;i<3;i++) for(var j=0;j<3;j++){
+      o[i*3+j] = a[i*3]*b[j] + a[i*3+1]*b[3+j] + a[i*3+2]*b[6+j];
+    }
+    return o;
+  }
+  function rotY(t){ var c=Math.cos(t),s=Math.sin(t); return [c,0,s, 0,1,0, -s,0,c]; }
+  function rotX(t){ var c=Math.cos(t),s=Math.sin(t); return [1,0,0, 0,c,-s, 0,s,c]; }
+
+  function draw(){
+    var dpr = window.devicePixelRatio || 1;
+    var w = box.clientWidth, h = box.clientHeight;
+    canvas.width = Math.round(w*dpr); canvas.height = Math.round(h*dpr);
+    canvas.style.width = w+'px'; canvas.style.height = h+'px';
+    var ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,w,h);
+
+    var scale = 0.42 * Math.min(w,h) / (data.radius || 1) * zoom;
+    var cx = w/2, cy = h/2;
+    var items = [];
+
+    for(var ci=0; ci<data.chains.length; ci++){
+      var ch = data.chains[ci];
+      var pts = [];
+      for(var i=0;i<ch.xyz.length;i++){
+        var p = ch.xyz[i];
+        var x = R[0]*p[0] + R[1]*p[1] + R[2]*p[2];
+        var y = R[3]*p[0] + R[4]*p[1] + R[5]*p[2];
+        var z = R[6]*p[0] + R[7]*p[1] + R[8]*p[2];
+        pts.push([cx + x*scale, cy - y*scale, z]);
+      }
+      var isBinder = ch.role === 'binder';
+      for(var k=0;k+1<pts.length;k++){
+        var a = pts[k], b2 = pts[k+1];
+        // Break the trace across chain gaps rather than drawing a long
+        // spurious bond through the structure.
+        var dx=a[0]-b2[0], dy=a[1]-b2[1], dz=(a[2]-b2[2])*scale;
+        if(Math.sqrt(dx*dx+dy*dy+dz*dz) > 9*scale) continue;
+        items.push({z:(a[2]+b2[2])/2, kind:'seg', a:a, b:b2, binder:isBinder});
+      }
+      for(var m=0;m<pts.length;m++){
+        var f = ch.flags[m];
+        if(f) items.push({z:pts[m][2], kind:f, p:pts[m],
+                          label:(ch.residues[m]||'')});
+      }
+    }
+    items.sort(function(p1,p2){ return p1.z - p2.z; });
+
+    var rad = data.radius || 1;
+    for(var n=0;n<items.length;n++){
+      var it = items[n];
+      // depth cue: nearer geometry is drawn more opaque
+      var t = (it.z/rad + 1)/2; if(t<0)t=0; if(t>1)t=1;
+      if(it.kind === 'seg'){
+        ctx.globalAlpha = 0.28 + 0.62*t;
+        ctx.strokeStyle = it.binder ? '#8250df' : '#8c959f';
+        ctx.lineWidth = (it.binder ? 2.8 : 1.9) * (0.75 + 0.5*t);
+        ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(it.a[0],it.a[1]); ctx.lineTo(it.b[0],it.b[1]);
+        ctx.stroke();
+      }else{
+        var hot = it.kind === 'hotspot';
+        ctx.globalAlpha = 0.45 + 0.55*t;
+        ctx.fillStyle = hot ? '#cf222e' : '#0969da';
+        ctx.beginPath();
+        ctx.arc(it.p[0], it.p[1], (hot?4.6:2.6)*(0.8+0.4*t), 0, 6.2832);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function at(e){
+    var r = canvas.getBoundingClientRect();
+    var t = e.touches ? e.touches[0] : e;
+    return {x:t.clientX - r.left, y:t.clientY - r.top};
+  }
+  function down(e){ drag = at(e); }
+  function move(e){
+    if(!drag) return;
+    var q = at(e), dx = q.x-drag.x, dy = q.y-drag.y;
+    drag = q;
+    R = mul(mul(rotY(dx*0.01), rotX(dy*0.01)), R);
+    draw();
+    if(e.cancelable) e.preventDefault();
+  }
+  function up(){ drag = null; }
+
+  canvas.addEventListener('mousedown', down);
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', up);
+  canvas.addEventListener('touchstart', down, {passive:true});
+  canvas.addEventListener('touchmove', move, {passive:false});
+  canvas.addEventListener('touchend', up);
+  canvas.addEventListener('wheel', function(e){
+    zoom *= (e.deltaY < 0 ? 1.12 : 0.89);
+    if(zoom < 0.3) zoom = 0.3;
+    if(zoom > 6) zoom = 6;
+    draw(); e.preventDefault();
+  }, {passive:false});
+  canvas.addEventListener('dblclick', function(){
+    R = [1,0,0, 0,1,0, 0,0,1]; zoom = 1; draw();
+  });
+  window.addEventListener('resize', draw);
+  draw();
+}
+
 window.addEventListener('DOMContentLoaded',function(){
-  tipInit(); navInit();
+  tipInit(); navInit(); initViewers();
   document.querySelectorAll('table.grid').forEach(function(t){
     filterTable(t.id,'');
     var s=t.getAttribute('data-sort');
@@ -1536,10 +1868,13 @@ def build(run_dir: str | Path, out_path: str | Path, title: str | None = None) -
         ("complexes", "Complex gate", sec_complexes(run)),
         ("epitopes", "Epitopes", sec_epitopes(run)),
         ("specs", "Specifications", sec_specs(run)),
-        ("binders", "Existing binders", sec_binders(run)),
+        ("designs", "Designed binders", sec_designs(run)),
+        ("reference", "Reference binders", sec_binders(run)),
         ("methods", "Methods", sec_methods(run)),
         ("provenance", "Provenance", sec_provenance(run)),
     ]
+
+    sections = [(sid, label, blk) for sid, label, blk in sections if blk.strip()]
 
     missing = missing_layers(run)
     banner = ""

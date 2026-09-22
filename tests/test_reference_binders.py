@@ -1,4 +1,8 @@
-"""Offline tests for stage 6 binder collection.
+"""Offline tests for reference-binder collection.
+
+These cover the PDB-mined comparison layer, which is not a pipeline stage and
+not a source of designs; the pipeline's own binders are covered by
+test_stage6_designs.py.
 
 These pin the distinctions that keep the binder section honest: what counts as
 a made binder, what counts as mini-binder scale, and that an overlap of zero is
@@ -9,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from ind2b.stage6_binders import (
+from ind2b.reference_binders import (
     MINIBINDER_MAX_RESIDUES,
     _binder_kind,
     compare_to_epitope,

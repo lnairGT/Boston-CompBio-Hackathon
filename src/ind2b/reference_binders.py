@@ -1,8 +1,16 @@
-"""Stage 6 - existing binders of the shortlisted targets.
+"""Reference binders - existing molecules that already bind these targets.
 
-Nothing in this stage designs anything. It answers a different, checkable
-question: *has anyone already made a binder against this target, and does it
-engage the surface this pipeline selected?*
+**This is not a pipeline stage and it is not where designed binders come
+from.** The pipeline's own binders come from a BindCraft2 campaign and are
+read by ``stage6_designs``. This module exists for a narrower purpose: to
+answer, for an illustration or a sanity check, *has anyone already made a
+binder against this target, and does it engage the surface we selected?*
+
+Run it explicitly (``ind2b reference-binders``) when you want that
+comparison. It is deliberately not wired into ``ind2b all``, because mining
+the PDB for other people's binders is not a step in designing your own, and a
+report that showed them by default would invite them to be mistaken for
+pipeline output.
 
 Two kinds of existing binder are collected, both from records the run already
 has or can fetch from the PDB:
@@ -41,14 +49,16 @@ import numpy as np
 import pandas as pd
 
 from . import __version__
-from .config import STAGE_FILES, InterfaceParams
+from .config import REFERENCE_BINDERS_FILE, InterfaceParams
 from .sources import rcsb
 from .stage3_complexes import classify_entry, partner_accession_map
 from .stage4_interface import auth_to_uniprot, interface_residues
 
-log = logging.getLogger("ind2b.stage6")
+log = logging.getLogger("ind2b.reference_binders")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+RECORD_KIND = "reference_binders"
 
 # Descriptions of chains that are engineered rather than natural. Matched only
 # on chains with no UniProt accession, so a natural protein whose name happens
@@ -248,19 +258,24 @@ def project_complex(
 
     allc = np.array([c for pts in chains.values() for _, c in pts])
     centre = allc.mean(axis=0)
-    # SVD on the centred cloud; columns of Vt are the principal directions.
+    # SVD on the centred cloud; rows of Vt are the principal directions.
     _, _, vt = np.linalg.svd(allc - centre, full_matrices=False)
-    basis = vt[:2].T
 
     epi, hot = set(epitope_auth), set(hotspot_auth)
     out_chains = []
     for cid, pts in chains.items():
-        xy = (np.array([c for _, c in pts]) - centre) @ basis
+        # All three components, in the principal-axis frame: the first two are
+        # the flat projection used for print, the third is depth. Storing the
+        # full frame is what lets a viewer rotate the complex without needing
+        # the original coordinate file.
+        full = (np.array([c for _, c in pts]) - centre) @ vt.T
         role = "target" if cid == target_chain else "binder"
         out_chains.append({
             "chain": cid,
             "role": role,
-            "points": [[round(float(x), 1), round(float(y), 1)] for x, y in xy],
+            "points": [[round(float(x), 1), round(float(y), 1)] for x, y, _ in full],
+            "xyz": [[round(float(x), 1), round(float(y), 1), round(float(z), 1)]
+                    for x, y, z in full],
             "residues": [k for k, _ in pts],
             "flags": [
                 ("hotspot" if k in hot else "epitope" if k in epi else "")
@@ -269,10 +284,14 @@ def project_complex(
         })
     xs = [p[0] for c in out_chains for p in c["points"]]
     ys = [p[1] for c in out_chains for p in c["points"]]
+    radius = float(np.linalg.norm(
+        np.array([p for c in out_chains for p in c["xyz"]]), axis=1).max())
     return {
-        "projection": "first two principal components of complex CA coordinates",
+        "projection": "principal-axis frame of the complex CA coordinates",
         "is_schematic": True,
         "bounds": [round(min(xs), 1), round(min(ys), 1), round(max(xs), 1), round(max(ys), 1)],
+        "radius": round(radius, 1),
+        "rotatable": True,
         "chains": out_chains,
     }
 
@@ -368,6 +387,7 @@ def run(
 
     return {
         "schema_version": SCHEMA_VERSION,
+        "record_kind": RECORD_KIND,
         "package_version": __version__,
         "disease_id": complexes.get("disease_id"),
         "disease_name": complexes.get("disease_name"),
@@ -462,13 +482,13 @@ def add_projections(
 
 def write(record: dict[str, Any], run_dir: Path) -> Path:
     run_dir.mkdir(parents=True, exist_ok=True)
-    path = run_dir / STAGE_FILES[6]
+    path = run_dir / REFERENCE_BINDERS_FILE
     path.write_text(json.dumps(record, indent=2))
     return path
 
 
 def read(run_dir: Path) -> dict[str, Any]:
-    path = run_dir / STAGE_FILES[6]
+    path = run_dir / REFERENCE_BINDERS_FILE
     if not path.exists():
-        raise FileNotFoundError(f"{path} not found - run stage 6 first")
+        raise FileNotFoundError(f"{path} not found - run `ind2b reference-binders` first")
     return json.loads(path.read_text())

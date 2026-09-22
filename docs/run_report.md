@@ -66,45 +66,81 @@ A matching skill, `ind2b-run-report`, wraps this renderer so an agent can
 build the report in one call.
 
 
-## Existing binders (stage 6)
+## Stage 6 - the binders the pipeline actually designed
 
-`ind2b stage6` collects binders that **already exist** against the shortlisted
-targets and compares their footprint with the epitope this pipeline selected:
+Stage 6 reads a **BindCraft2 campaign's own output**. It is adaptive, not
+hardcoded: point it at one or more `project_folder`s, or let it look under
+`results/` and `campaigns/` in the run directory.
 
 ```bash
 ind2b stage6 --efo-id MONDO_0005233
+ind2b stage6 --efo-id MONDO_0005233 --project-folder /path/to/campaign
 ```
 
-Two kinds are collected, both from the PDB search stage 3 already performed:
+It reads the files BindCraft2 writes - `3_Ranked/!_Ranked.csv` (the record of
+what was accepted), `2_Refolded/!_Refolded.csv`, `1_Trajectories/!_Trajectories.csv`,
+`summary.csv` and `campaign_metadata.json` - and for each accepted design records
+its sequence, every metric column the campaign wrote, its structure file, and
+whether it engaged the hotspots the stage 5 specification requested. Both sides of
+that comparison are in the written structure's author numbering, which is what the
+specification asked for, so they compare directly.
 
-- **designed** — a de novo binder, miniprotein or designed scaffold (DARPin,
-  designed scFv). These carry no UniProt accession because they do not exist in
-  nature, which is why stage 3 set them aside as non-partners. They are the
-  closest published analogue to a BindCraft2 output.
-- **antibody** — Fab, scFv or nanobody complexes, clinically validated for
-  several of these targets.
+If no campaign output exists, stage 6 says so and the report's **Designed
+binders** section states that no binder has been designed. Nothing is
+substituted for it.
 
-For each, the target-side footprint is computed with stage 4's interface
-definition, mapped into UniProt numbering through the SIFTS alignment, and
-compared with the selected epitope (shared positions, Jaccard, fraction of
-selected hotspots covered). A 2-D projection of the complex's CA trace is
-computed here and persisted, so the report draws the structure from a record
-rather than re-reading coordinates.
+### What stage 6 refuses to let you misread
+
+These follow the upstream output documentation:
+
+- **Acceptance is not affinity.** An accepted design passed the configured
+  computational filters; that establishes neither affinity, specificity nor
+  experimental stability.
+- **A blank is not a zero.** Missing metrics stay missing; `failed_filters`
+  distinguishes "not measured" from a poor score.
+- **Rank is not probability.** `rank` is a position in one ranking.
+- **Some attempts ran an easier task.** Where `autotuned` names `initial_guess`,
+  `target_flexibility`, `validation_model` or a raised `design_recycles`, that
+  attempt ran on the desperation ladder - a weaker problem than the campaign
+  specified. Those designs are flagged in the record and in the report, because
+  their scores are not comparable with the rest.
+- **A missing stage folder is informative.** It appears only once its first
+  result is written, so its absence means the campaign did not get that far -
+  not that the target is undesignable.
+
+## Reference binders - a comparison, not a pipeline stage
+
+`ind2b reference-binders` mines the PDB for binders that **already exist**
+against the shortlisted targets (de novo designs, miniproteins, DARPins,
+designed scFvs, antibodies) and compares their footprint with the selected
+epitope.
+
+It is deliberately **not** part of the pipeline and not wired into `all`:
+other people's binders are not this pipeline's output, and a report that
+showed them by default would invite exactly that confusion. Run it when you
+want the comparison - it is what the committed example report shows, because
+no campaign has been run for that example.
+
+Its output lands in `reference_binders.json`, and the report renders it in a
+**Reference binders (not designed here)** section, separate from Designed
+binders and labelled as reference molecules throughout.
 
 ### Reading the overlap correctly
 
-**Nothing in this stage is a design produced by the pipeline.** Overlap with an
-existing binder is evidence that a surface is *bindable*; it says nothing about
-the affinity or specificity of a binder not yet made.
+Overlap with an existing binder is evidence that a surface is *bindable*; it
+says nothing about a binder not yet made. A zero overlap has two very different
+causes, and the record distinguishes them via `epitope_present_in_construct`:
+the deposited construct may not contain the selected epitope at all (silence
+about that surface), or the epitope is present and the binder engages elsewhere
+(informative). `is_minibinder_scale` separates mini-binder analogues from large
+designed scaffolds, whose footprints are far larger than a campaign produces.
 
-A zero overlap has two very different causes, and the record distinguishes them
-via `epitope_present_in_construct`:
+## 3-D viewers
 
-- the deposited construct **does not contain** the selected epitope — the zero
-  is silence about that surface, not evidence against it;
-- the epitope **is** present and the binder engages elsewhere — informative.
-
-Scale matters too. `is_minibinder_scale` flags binders at or below
-`MINIBINDER_MAX_RESIDUES` (100). A DARPin or scFv footprint is much larger than
-anything a mini-binder campaign will produce, so a large scaffold binding a
-different surface is a fact about that scaffold, not about the epitope.
+Structure figures are rotatable: drag to rotate, scroll to zoom, double-click to
+reset. The geometry is a persisted principal-axis frame of the complex's CA
+coordinates, drawn on a canvas by the report's own code - there is no viewer
+library to fetch, so the file stays self-contained and works offline. The cost is
+that this is a backbone trace, not cartoon ribbons or a molecular surface; for
+publication-quality rendering open the deposited entry in PyMOL, ChimeraX or
+Mol*. Printing falls back to a flat SVG of the same geometry.
