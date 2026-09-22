@@ -26,7 +26,7 @@ from typing import Any
 
 import requests
 
-from ..contracts import Evidence, Provenance
+from ..contracts import Evidence, Provenance, utcnow
 
 ADAPTER_VERSION = "structures/1.0.0"
 
@@ -335,6 +335,115 @@ def assess_structure(accession: str, mechanism_constraint: str | None = None) ->
         "design_ready": bool(access["accessible"] and (experimental or af)),
     }
     return assessment, evidence, prov
+
+
+PDBE_SIFTS = "https://www.ebi.ac.uk/pdbe/api/mappings/uniprot/{pdb}"
+
+
+def pdb_uniprot_mapping(pdb_id: str) -> dict[str, Any]:
+    """Map PDB author residue numbering onto UniProt canonical numbering, via SIFTS.
+
+    This is not bookkeeping, it is a correctness requirement. Design tools address
+    residues in **PDB author numbering**; sequence-level analysis (paralogue epitope
+    cross-reactivity, conservation, mutagenesis design) addresses them in **UniProt
+    canonical numbering**. For 1IAR the IL4R chain carries an offset of +25, so a hotspot
+    written as residue 59 in the structure is residue 84 in the sequence. Passing one set
+    of numbers into the other silently analyses a different part of the protein.
+
+    It also answers a question that is easy to get wrong in a complex: *which chain is
+    actually my target?* In 1IAR chain A is IL-4 (P05112) and chain B is IL-4Rα (P24394).
+    Designing against "chain A" of that entry engages the cytokine, not the receptor.
+
+    Returns ``{pdb_id, chains: {chain: {accession, unp_start, unp_end, author_start,
+    offset, identifier}}, accessions: {accession: [chains]}}``.
+    """
+    r = _get(PDBE_SIFTS.format(pdb=pdb_id.lower()))
+    if r.status_code != 200:
+        raise StructureAdapterError(
+            f"SIFTS mapping unavailable for {pdb_id} (HTTP {r.status_code}). Residue "
+            "numbering cannot be reconciled; do not assume author numbering equals UniProt.",
+            transient=r.status_code >= 500,
+        )
+    body = (r.json() or {}).get(pdb_id.lower()) or {}
+    blocks = body.get("UniProt") or {}
+    chains: dict[str, Any] = {}
+    accessions: dict[str, list[str]] = {}
+    for acc, blk in blocks.items():
+        for m in blk.get("mappings") or []:
+            chain = m.get("chain_id") or m.get("struct_asym_id")
+            start, end = (m.get("start") or {}), (m.get("end") or {})
+            unp_start = m.get("unp_start")
+            # SIFTS gives author numbering for most entries, but for some (3L5X, 4I77,
+            # 8K4Q among our candidates) `author_residue_number` is null and only the
+            # SEQRES index is present. Those are DIFFERENT numbering bases and an offset
+            # derived from one is wrong for the other, so the basis is recorded rather
+            # than quietly substituted.
+            author_start = start.get("author_residue_number")
+            if author_start is not None:
+                basis, ref_start, ref_end = "author", author_start, end.get("author_residue_number")
+            else:
+                basis, ref_start, ref_end = "seqres", start.get("residue_number"), end.get("residue_number")
+            offset = (unp_start - ref_start) if (unp_start is not None and ref_start is not None) else None
+            chains[chain] = {
+                "accession": acc,
+                "identifier": blk.get("identifier"),
+                "unp_start": unp_start,
+                "unp_end": m.get("unp_end"),
+                "numbering_basis": basis,
+                "ref_start": ref_start,
+                "ref_end": ref_end,
+                "author_start": author_start,
+                "offset_to_uniprot": offset,
+            }
+            accessions.setdefault(acc, []).append(chain)
+    if not chains:
+        raise StructureAdapterError(f"SIFTS returned no UniProt mapping for {pdb_id}.")
+    return {"pdb_id": pdb_id.upper(), "chains": chains, "accessions": accessions,
+            "source": "PDBe SIFTS", "retrieved_at": utcnow().isoformat()}
+
+
+def chain_for_accession(pdb_id: str, accession: str) -> tuple[str | None, dict[str, Any]]:
+    """Which chain of this entry is the requested protein? Never guess 'A'."""
+    mapping = pdb_uniprot_mapping(pdb_id)
+    chains = mapping["accessions"].get(accession) or []
+    return (chains[0] if chains else None), mapping
+
+
+def to_uniprot_numbering(pdb_id: str, chain: str, author_residues: "list[int | str]") -> dict[str, Any]:
+    """Convert author-numbered residues (``59`` or ``"B59"``) to UniProt canonical numbering."""
+    mapping = pdb_uniprot_mapping(pdb_id)
+    info = mapping["chains"].get(chain)
+    if info is None:
+        raise StructureAdapterError(
+            f"Chain '{chain}' has no UniProt mapping in {pdb_id}. Available: {sorted(mapping['chains'])}."
+        )
+    offset = info["offset_to_uniprot"]
+    if offset is None:
+        raise StructureAdapterError(f"SIFTS gave no usable offset for {pdb_id} chain {chain}.")
+    converted, out_of_range = [], []
+    for res in author_residues:
+        n = int(str(res).lstrip(chain)) if isinstance(res, str) else int(res)
+        u = n + offset
+        (converted if (info["unp_start"] <= u <= info["unp_end"]) else out_of_range).append(u)
+
+    caveats = []
+    if out_of_range:
+        caveats.append("Residues outside the mapped span are not covered by this structure and must "
+                       "not be treated as verified positions.")
+    if info["numbering_basis"] != "author":
+        caveats.append(f"SIFTS exposes no author numbering for this entry; the offset is relative to "
+                       f"{info['numbering_basis']} numbering. Confirm which basis the input residues use "
+                       f"before relying on the converted positions.")
+    return {
+        "pdb_id": mapping["pdb_id"], "chain": chain, "accession": info["accession"],
+        "numbering_basis": info["numbering_basis"],
+        "offset_to_uniprot": offset,
+        "uniprot_residues": converted,
+        "out_of_mapped_range": out_of_range,
+        "mapped_span_uniprot": [info["unp_start"], info["unp_end"]],
+        "caveats": caveats or None,
+        "source": "PDBe SIFTS",
+    }
 
 
 def verify_identity(gene_symbol: str, ensembl_id: str, accession: str, expected_taxon: int = 9606) -> dict[str, Any]:
