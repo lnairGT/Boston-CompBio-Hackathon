@@ -15,11 +15,11 @@ The pipeline never submits a design job. Stage 5 writes specification files and 
 | Stage | Module | Does | Status |
 |------:|--------|------|--------|
 | 0 | `stage0_resolve` | indication string -> disease ontology id + subtree | **implemented** |
-| 1 | `stage1_evidence` | disease id -> per-target evidence payloads | planned |
-| 2 | `stage2_score` | evidence -> ranked target table | planned |
-| 3 | `stage3_complexes` | ranked targets -> qualifying experimental complexes | planned |
-| 4 | `stage4_interface` | complexes -> interface residues + buried SASA | planned |
-| 5 | `stage5_specs` | epitopes -> BindCraft2 target spec JSON | planned |
+| 1 | `stage1_evidence` | disease id -> per-target evidence payloads | **implemented** |
+| 2 | `stage2_score` | evidence -> ranked target table | **implemented** |
+| 3 | `stage3_complexes` | ranked targets -> qualifying experimental complexes | **implemented** |
+| 4 | `stage4_interface` | complexes -> interface residues + buried SASA | **implemented** |
+| 5 | `stage5_specs` | epitopes -> BindCraft2 target spec JSON | **implemented** |
 
 ## Install
 
@@ -42,7 +42,29 @@ ind2b stage0 --indication "non-small cell lung carcinoma"
 
 # or pin the term explicitly (the reproducible path once a term is agreed)
 ind2b stage0 --efo-id MONDO_0005233
+
+# stage 1: gather the evidence layers for the candidate targets
+ind2b stage1 --efo-id MONDO_0005233 --n-targets 100
+
+# stage 2: score and rank (re-run with --weights to re-rank without re-fetching)
+ind2b stage2 --efo-id MONDO_0005233 --top 20
+
+# stage 3: keep only targets with a qualifying experimental complex
+ind2b stage3 --efo-id MONDO_0005233
+
+# stage 4: compute interfaces, map numbering, select compact hotspot patches
+ind2b stage4 --efo-id MONDO_0005233
+
+# stage 5: write BindCraft2 target + campaign specs (runs nothing)
+ind2b stage5 --efo-id MONDO_0005233 --max-trajectories 200
+
+# optional: assemble the run report from the stage outputs
+python scripts/build_report.py runs/MONDO_0005233
 ```
+
+Stage 5 writes specifications and stops. Launching a design campaign needs a
+GPU host and real money, and that decision belongs to whoever reads the
+epitope shortlist.
 
 Output:
 
@@ -111,12 +133,14 @@ a measured interface is the only input to that choice which is not itself a pred
 
 | Source | Used for |
 |--------|----------|
-| Open Targets Platform | disease ontology, target associations, tractability, localization, safety, expression specificity, interaction partners |
+| Open Targets Platform | disease ontology, target associations (including the `literature` and `genetic_literature` evidence scores), tractability, safety, expression specificity, interaction partners |
+| UniProt | topology-based accessibility, extracellular spans, sequence |
 | RCSB PDB | experimental complex search, structure files |
-| UniProt | accession mapping, sequence, functional sites |
-| ChEMBL | mechanism and modality precedent |
-| ClinicalTrials.gov | clinical precedent, including failures |
-| OpenAlex | literature support (requires a free API key) |
+| ChEMBL | mechanism and action-type precedent |
+| ClinicalTrials.gov | clinical precedent, including stopped trials |
+
+Literature support is taken from the Open Targets evidence breakdown rather than a
+separate bibliographic database, so no additional API key is needed.
 
 Please cite the underlying databases in any work that uses this pipeline.
 
