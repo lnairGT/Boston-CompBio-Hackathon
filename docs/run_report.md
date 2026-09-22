@@ -13,6 +13,13 @@ chart are inlined and no asset is fetched at view time, so the file opens from
 a laptop with no network. Charts are hand-emitted SVG rather than raster
 images, so they stay sharp at any zoom and can carry their own tooltips.
 
+## Example output
+
+`docs/examples/nsclc_run_report.html` is the report this renderer produced for the
+non-small cell lung carcinoma run, committed so it can be reviewed without running
+the pipeline. GitHub will not execute the page in the file view — download it or use
+the Raw link. See `docs/examples/README.md` for how it was generated.
+
 ## Sections
 
 | Section | Shows |
