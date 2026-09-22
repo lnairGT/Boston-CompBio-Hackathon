@@ -54,6 +54,7 @@ LAYERS: dict[str, list[str]] = {
     "residues": ["stage4_interface_residues.csv", "interface_residues.csv"],
     "interface_meta": ["stage4_interface_meta.json"],
     "specs_manifest": ["stage5_specs/manifest.json"],
+    "binders": ["stage6_binders.json"],
     "run_manifest": ["run_manifest.json", "provenance.json"],
     "design_run": ["design_run.json"],
     "candidates": ["candidates.json", "candidates.csv"],
@@ -303,6 +304,79 @@ def svg_sequence_track(
         '<text x="120" y="12" class="svg-lbl">interface</text>'
         '<line x1="186" y1="4" x2="186" y2="12" stroke="#cf222e" stroke-width="2.4"/>'
         '<text x="194" y="12" class="svg-lbl">hotspot patch</text>'
+        "</g>"
+    )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def svg_structure(projection: dict, width: int = 820, height: int = 380) -> str:
+    """Draw a persisted 2-D CA-trace projection of a target-binder complex.
+
+    This is a backbone schematic, not a molecular surface, and is labelled as
+    such: the projection was computed upstream (first two principal components
+    of the complex's CA coordinates) and stored, so the report draws from a
+    record rather than re-reading coordinates.
+    """
+    chains = projection.get("chains") or []
+    if not chains:
+        return ""
+    x0, y0, x1, y1 = projection.get("bounds") or [0, 0, 1, 1]
+    span_x, span_y = max(1e-6, x1 - x0), max(1e-6, y1 - y0)
+    pad = 26
+    scale = min((width - 2 * pad) / span_x, (height - 2 * pad) / span_y)
+    off_x = pad + ((width - 2 * pad) - span_x * scale) / 2
+    off_y = pad + ((height - 2 * pad) - span_y * scale) / 2
+
+    def px(p):
+        return (off_x + (p[0] - x0) * scale, off_y + (y1 - p[1]) * scale)
+
+    parts = [f'<svg viewBox="0 0 {width} {height}" class="chart struct" role="img" '
+             f'aria-label="backbone projection of the target-binder complex">']
+    # Binder behind, target in front, so highlighted epitope dots stay visible.
+    for chain in sorted(chains, key=lambda c: c["role"] != "binder"):
+        pts = [px(p) for p in chain["points"]]
+        if len(pts) < 2:
+            continue
+        path = "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+        if chain["role"] == "binder":
+            parts.append(
+                f'<path d="{path}" fill="none" stroke="#8250df" stroke-width="2.6" '
+                f'stroke-opacity="0.85" stroke-linejoin="round" '
+                f'data-tip="binder chain {esc(chain["chain"])} '
+                f'({len(chain["points"])} residues modelled)"/>'
+            )
+        else:
+            parts.append(
+                f'<path d="{path}" fill="none" stroke="#8c959f" stroke-width="1.8" '
+                f'stroke-opacity="0.75" stroke-linejoin="round" '
+                f'data-tip="target chain {esc(chain["chain"])} '
+                f'({len(chain["points"])} residues modelled)"/>'
+            )
+            flags = chain.get("flags") or []
+            resids = chain.get("residues") or []
+            for i, (x, y) in enumerate(pts):
+                flag = flags[i] if i < len(flags) else ""
+                if not flag:
+                    continue
+                rid = resids[i] if i < len(resids) else "?"
+                if flag == "hotspot":
+                    parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4.2" '
+                                 f'fill="#cf222e" data-tip="hotspot {esc(rid)}"/>')
+                else:
+                    parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.4" '
+                                 f'fill="#0969da" fill-opacity="0.75" '
+                                 f'data-tip="epitope residue {esc(rid)}"/>')
+    parts.append(
+        '<g class="legend">'
+        '<line x1="14" y1="12" x2="34" y2="12" stroke="#8250df" stroke-width="2.6"/>'
+        '<text x="39" y="16" class="svg-lbl">binder backbone</text>'
+        '<line x1="146" y1="12" x2="166" y2="12" stroke="#8c959f" stroke-width="1.8"/>'
+        '<text x="171" y="16" class="svg-lbl">target backbone</text>'
+        '<circle cx="288" cy="12" r="2.4" fill="#0969da" fill-opacity="0.75"/>'
+        '<text x="296" y="16" class="svg-lbl">epitope</text>'
+        '<circle cx="356" cy="12" r="4.2" fill="#cf222e"/>'
+        '<text x="366" y="16" class="svg-lbl">hotspot</text>'
         "</g>"
     )
     parts.append("</svg>")
@@ -942,6 +1016,217 @@ def sec_specs(run: dict) -> str:
                 note=note, sub=f'{sm.get("n_specs")} written')
 
 
+def sec_binders(run: dict) -> str:
+    """Existing binders of these targets - none produced by this pipeline."""
+    rec = run.get("binders")
+    if not rec:
+        return absent_card(
+            "Existing binders",
+            "No stage 6 binder record was found, so no existing binder of these "
+            "targets is shown. Run `ind2b stage6` to collect them.")
+
+    lead = (
+        '<p class="verdict warn"><strong>None of these binders came from this '
+        'pipeline.</strong> Every molecule below already exists &mdash; a designed '
+        'binder deposited in the PDB, or a clinical antibody. They are shown '
+        'because an existing binder against the same surface is evidence that '
+        'the surface is <em>bindable</em>; that is not evidence that a new '
+        'binder against it will have useful affinity or specificity.</p>'
+    )
+
+    # Mini-binder-scale designs are the ones comparable to a BindCraft2 output.
+    minis = [
+        (t, b) for t in rec["targets"] for b in t["binders"]
+        if b.get("is_minibinder_scale") and (b.get("vs_selected_epitope") or {}).get("comparable")
+    ]
+    covered = [
+        (t, b) for t, b in minis
+        if (b["vs_selected_epitope"].get("fraction_of_hotspots_covered") or 0) >= 0.99
+    ]
+    if minis:
+        lead += (
+            f'<p class="note">Of the {len(minis)} published de novo binder(s) at '
+            f'mini-binder scale (&le; {esc(rec.get("minibinder_max_residues"))} residues) '
+            f'whose footprint could be mapped, <strong>{len(covered)}</strong> engage every '
+            f'hotspot this pipeline selected for that target. Larger designed scaffolds '
+            f'(DARPins and designed scFvs) in the table below mostly do not &mdash; they '
+            f'were raised against other surfaces. Read a zero there carefully: where '
+            f'the deposited construct does not even contain the selected epitope, '
+            f'the zero is silence about that surface rather than evidence against '
+            f'it, and the row says which case applies.</p>'
+            '<p class="note">Calibrate that agreement honestly: these are the '
+            'canonical ligand-binding interfaces of well-studied receptors, which '
+            'is where both a human designer and this pipeline would look first. '
+            'Convergence on them is a sanity check that the epitope selection is '
+            'not eccentric &mdash; it is not evidence that the pipeline finds '
+            'non-obvious sites, and it does not extend to the targets here that '
+            'have no published designed binder.</p>'
+        )
+
+    # --- example structures
+    examples = [
+        (t, b) for t in rec["targets"] for b in t["binders"] if b.get("projection")
+    ]
+    examples.sort(key=lambda tb: (not tb[1].get("is_minibinder_scale"),
+                                   tb[1].get("resolution") or 99.0))
+    gallery = ""
+    for t, b in examples:
+        cmp_ = b.get("vs_selected_epitope") or {}
+        fp = b.get("footprint") or {}
+        sel = b.get("selected_epitope") or {}
+        cov = cmp_.get("fraction_of_hotspots_covered")
+        headline = (
+            f'{t["symbol"]} &mdash; {esc(b["binder_descriptions"][0])}'
+            if b.get("binder_descriptions") else f'{t["symbol"]} binder'
+        )
+        badge = (pill(f'{b["binder_length"]} aa', "ok" if b.get("is_minibinder_scale") else "")
+                 + " " + pill(b["kind"], "ok" if b["kind"] == "designed" else ""))
+        note = None
+        if cmp_.get("comparable"):
+            if cov is not None and cov >= 0.99:
+                note = (f'<span class="ok-text">This binder covers every hotspot '
+                        f'selected for {esc(t["symbol"])}</span> '
+                        f'({esc(",".join(str(h) for h in cmp_.get("hotspots_covered") or []))}), '
+                        f'sharing {cmp_["n_shared"]} interface positions '
+                        f'(Jaccard {num(cmp_["jaccard"], 2)}) with the epitope taken from '
+                        f'<code>{esc(sel.get("entry_id"))}</code> vs '
+                        f'{esc(sel.get("partner_symbol"))}.')
+            elif cov is not None:
+                note = (f'Covers {pct(cov)} of the selected hotspots '
+                        f'({cmp_["n_shared"]} shared positions, Jaccard '
+                        f'{num(cmp_["jaccard"], 2)}) &mdash; this binder engages a '
+                        f'largely different surface from the one selected here.')
+        body = (
+            f'<div class="card-head"><h4 style="margin:0">{headline}</h4>'
+            f'<span class="sub">{badge}</span></div>'
+            + (f'<p class="note">{note}</p>' if note else "")
+            + svg_structure(b["projection"])
+            + f'<p class="caption">Backbone schematic of <code>{esc(b["entry_id"])}</code> '
+              f'at {num(b.get("resolution"), 2)}&#8491;, projected onto the complex\'s two '
+              f'principal axes. Lines trace C&alpha; positions only &mdash; this is not a '
+              f'molecular surface, and apparent gaps are unmodelled residues. Highlighted '
+              f'residues are the {esc(b["projection"].get("epitope_source", "epitope"))}. '
+              f'Footprint buries {num(fp.get("buried_area_total"), 0)}&#8491;&sup2; over '
+              f'{esc(fp.get("n_footprint_residues"))} residues.</p>'
+        )
+        gallery += f'<div class="example">{body}</div>'
+
+    if gallery:
+        gallery = ('<h4>Example complexes</h4>' + gallery)
+    else:
+        gallery = ('<p class="absent">No example complex could be projected, so no '
+                   'structure is drawn here.</p>')
+
+    # --- full table
+    headers = [("target", "text"), ("kind", "text"), ("binder", "text"),
+               ("PDB", "text"), ("res &#8491;", "num"), ("binder aa", "num"),
+               ("buried &#8491;&sup2;", "num"), ("shared", "num"),
+               ("hotspots covered", "num")]
+    rows, details = [], []
+    for t in rec["targets"]:
+        for b in t["binders"]:
+            cmp_ = b.get("vs_selected_epitope") or {}
+            fp = b.get("footprint") or {}
+            cov = cmp_.get("fraction_of_hotspots_covered")
+            rows.append([
+                f'<strong>{esc(t["symbol"])}</strong>',
+                pill(b["kind"], "ok" if b["kind"] == "designed" else ""),
+                trunc((b.get("binder_descriptions") or [None])[0], 34),
+                f'<code>{esc(b["entry_id"])}</code>',
+                num(b.get("resolution"), 2),
+                num(b.get("binder_length"), 0),
+                num(fp.get("buried_area_total"), 0),
+                num(cmp_.get("n_shared"), 0) if cmp_.get("comparable") else "&mdash;",
+                pct(cov) if cov is not None else "&mdash;",
+            ])
+            d = ""
+            if not fp:
+                d += ('<p class="absent">The target-side footprint could not be '
+                      'computed for this complex, so no comparison with the selected '
+                      'epitope is shown.</p>')
+            elif not cmp_.get("comparable"):
+                d += (f'<p class="absent">Not comparable: '
+                      f'{esc(cmp_.get("reason", "footprint could not be mapped"))}.</p>')
+            else:
+                d += kv([
+                    ("shared positions",
+                     f'<code>{esc(",".join(str(x) for x in cmp_.get("shared_positions") or []))}</code>'),
+                    ("hotspots covered",
+                     f'<code>{esc(",".join(str(x) for x in cmp_.get("hotspots_covered") or []) or "none")}</code>'),
+                    ("hotspots missed",
+                     f'<code>{esc(",".join(str(x) for x in cmp_.get("hotspots_missed") or []) or "none")}</code>'),
+                    ("Jaccard overlap", num(cmp_.get("jaccard"), 3)),
+                    ("epitope covered", pct(cmp_.get("fraction_of_epitope_covered"))),
+                    ("selected epitope in this construct",
+                     (pill("yes", "ok") if cmp_.get("epitope_present_in_construct")
+                      else pill("no", "warn"))
+                     + f' <span class="dim">({esc(cmp_.get("n_epitope_positions_in_construct"))} '
+                       f'of its positions modelled here)</span>'),
+                    ("how to read the overlap", esc(cmp_.get("interpretation"))),
+                ])
+            if fp:
+                top = fp.get("top_residues") or []
+                if top:
+                    d += ("<h5>Most-buried footprint residues</h5>" + table(
+                        f'tbl-bfp-{slug(t["symbol"])}-{slug(b["entry_id"])}-{slug(b["kind"])}',
+                        [("residue", "text"), ("UniProt", "num"),
+                         ("buried &#8491;&sup2;", "num"), ("contact", "text")],
+                        [[f'{esc(x.get("residue"))}<strong>{esc(x.get("auth_seq_id"))}</strong>',
+                          num(x.get("uniprot_pos"), 0), num(x.get("delta_sasa"), 1),
+                          pill("yes", "ok") if x.get("is_contact") else pill("no")]
+                         for x in top],
+                        filter_label="Filter residues"))
+            d += kv([
+                ("entry title", esc(b.get("title"))),
+                ("method", esc(b.get("method"))),
+                ("binder chains", esc(", ".join(b.get("binder_chains") or []))),
+                ("chain used for footprint", esc(fp.get("binder_chain_used"))),
+                ("construct UniProt range",
+                 (f'{esc((fp.get("construct_uniprot_range") or [None, None])[0])}'
+                  f'&ndash;{esc((fp.get("construct_uniprot_range") or [None, None])[1])}'
+                  f' <span class="dim">({esc(fp.get("n_construct_residues_mapped"))} '
+                  f'residues mapped)</span>')
+                 if fp.get("construct_uniprot_range") else "&mdash;"),
+                ("mini-binder scale",
+                 pill("yes", "ok") if b.get("is_minibinder_scale") else pill("no")),
+            ])
+            details.append(d)
+
+    clinical_rows = []
+    for t in rec["targets"]:
+        for d in t.get("clinical_binders") or []:
+            clinical_rows.append([
+                f'<strong>{esc(t["symbol"])}</strong>',
+                esc(d.get("drug")),
+                esc(d.get("drug_type")),
+                pill(str(d.get("max_clinical_stage")),
+                     "ok" if d.get("max_clinical_stage") == "APPROVAL" else "warn"),
+            ])
+
+    body = lead + gallery
+    if rows:
+        body += ("<h4>All analysed binder complexes</h4>"
+                 '<p class="note">One complex per binder kind per target, best resolved '
+                 'first. Click a row for the shared positions and the most-buried '
+                 'footprint residues.</p>'
+                 + table("tbl-binders", headers, rows, details=details,
+                         filter_label="Filter by target, PDB id, kind..."))
+    if clinical_rows:
+        body += ("<h4>Clinical binders recorded for these targets</h4>"
+                 '<p class="note">Biologic drugs from the run\'s own drug-precedent '
+                 'layer. These are molecules in development or approved, not designs, '
+                 'and their epitopes are not computed here unless a structure appears '
+                 'in the table above.</p>'
+                 + table("tbl-clin",
+                         [("target", "text"), ("drug", "text"), ("modality", "text"),
+                          ("stage", "text")],
+                         clinical_rows, filter_label="Filter drugs"))
+    return card("Existing binders for these targets", body,
+                note=esc(rec.get("not_our_designs")),
+                sub=f'{rec.get("n_with_designed")} of {rec.get("n_targets")} '
+                    f'targets have a designed binder in the PDB')
+
+
 def sec_design_status(run: dict) -> str:
     """State plainly whether anything was actually designed."""
     dr = run.get("design_run")
@@ -1085,6 +1370,11 @@ tr.detail.open{display:table-row}
 tr.detail td{background:#fbfcfd;border-bottom:1px solid var(--border)}
 .detail-in{padding:6px 2px 10px}
 .dim{color:var(--muted)}
+.ok-text{color:var(--ok);font-weight:550}
+.caption{color:var(--muted);font-size:12.5px;margin:2px 0 10px;max-width:70ch}
+.example{border:1px solid var(--border);border-radius:6px;padding:12px 14px;
+margin:10px 0;background:#fbfcfd}
+.struct{background:#fff;border:1px solid #eaeef2;border-radius:6px}
 .pill{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11.5px;
 font-weight:550;background:#eaeef2;color:#424a53;white-space:nowrap}
 .pill.ok{background:#dafbe1;color:#0f5323}
@@ -1250,6 +1540,7 @@ def build(run_dir: str | Path, out_path: str | Path, title: str | None = None) -
         ("complexes", "Complex gate", sec_complexes(run)),
         ("epitopes", "Epitopes", sec_epitopes(run)),
         ("specs", "Specifications", sec_specs(run)),
+        ("binders", "Existing binders", sec_binders(run)),
         ("methods", "Methods", sec_methods(run)),
         ("provenance", "Provenance", sec_provenance(run)),
     ]

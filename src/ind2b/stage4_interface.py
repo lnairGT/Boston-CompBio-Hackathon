@@ -208,11 +208,15 @@ def interface_residues(
             if not contact and delta < params.min_delta_sasa:
                 continue
             anchor = res["CB"] if "CB" in res else (res["CA"] if "CA" in res else None)
+            # `if anchor` would raise: a DisorderedAtom's __len__ delegates to
+            # its selected child Atom, which has no __len__, so truth-testing a
+            # disordered CB blows up the whole complex. Compare against None.
             rows.append(
                 {
                     "auth_seq_id": key,
                     "residue": res.get_resname(),
-                    "coord": [float(c) for c in anchor.coord] if anchor else None,
+                    "coord": ([float(c) for c in anchor.coord]
+                              if anchor is not None else None),
                     "delta_sasa": round(delta, 2),
                     "min_distance": round(min_dist.get(key, float("nan")), 2)
                     if contact

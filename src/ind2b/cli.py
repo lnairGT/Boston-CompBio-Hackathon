@@ -181,6 +181,37 @@ def cmd_stage5(args) -> int:
     return 0
 
 
+def cmd_stage6(args) -> int:
+    from . import stage1_evidence, stage3_complexes, stage4_interface, stage6_binders
+
+    run_dir = _resolve_run_dir(args, efo_id=args.efo_id)
+    complexes = stage3_complexes.read(run_dir)
+    epitopes = stage4_interface.read(run_dir)
+    evidence = stage1_evidence.read(run_dir)
+    record = stage6_binders.run(
+        complexes, epitopes, evidence, run_dir=run_dir, max_per_kind=args.max_per_kind
+    )
+    record = stage6_binders.add_projections(
+        record, run_dir, epitopes, max_examples=args.max_projections
+    )
+    path = stage6_binders.write(record, run_dir)
+
+    print(f"{record['n_with_designed']} of {record['n_targets']} targets have a "
+          f"designed-binder complex in the PDB")
+    for t in record["targets"]:
+        for b in t["binders"]:
+            cmp_ = b.get("vs_selected_epitope") or {}
+            shared = (f'{cmp_["n_shared"]} shared, '
+                      f'{cmp_["fraction_of_hotspots_covered"]:.0%} of hotspots'
+                      if cmp_.get("comparable") and
+                      cmp_.get("fraction_of_hotspots_covered") is not None
+                      else "not comparable")
+            print(f"  {t['symbol']:<8} {b['kind']:<9} {b['entry_id']} "
+                  f"{b['resolution']}A  binder {b['binder_length']}aa  -> {shared}")
+    print(f"\nNo binder here was designed by this pipeline. {path}")
+    return 0
+
+
 def cmd_schema_check(args) -> int:
     """Verify the Open Targets field names this package queries still exist."""
     from .sources import opentargets as ot
@@ -266,6 +297,16 @@ def build_parser() -> argparse.ArgumentParser:
     s5.add_argument("--top-n", type=int, default=None, help="emit only the top N")
     _add_common(s5)
     s5.set_defaults(func=cmd_stage5)
+
+    s6 = sub.add_parser(
+        "stage6", help="find existing binders (designed and antibody) of the targets")
+    s6.add_argument("--efo-id", default=None, help="disease id (locates the run directory)")
+    s6.add_argument("--max-per-kind", type=int, default=1,
+                     help="complexes to analyse per binder kind per target")
+    s6.add_argument("--max-projections", type=int, default=6,
+                     help="example complexes to project for drawing")
+    _add_common(s6)
+    s6.set_defaults(func=cmd_stage6)
 
     sc = sub.add_parser("schema-check", help="verify upstream GraphQL field names")
     _add_common(sc)

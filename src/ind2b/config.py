@@ -36,6 +36,7 @@ STAGE_FILES = {
     3: "stage3_complexes.json",
     4: "stage4_epitopes.csv",
     5: "stage5_specs",  # a directory
+    6: "stage6_binders.json",
 }
 
 
