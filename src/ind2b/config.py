@@ -36,7 +36,17 @@ STAGE_FILES = {
     3: "stage3_complexes.json",
     4: "stage4_epitopes.csv",
     5: "stage5_specs",  # a directory
+    6: "stage6_designs.json",
 }
+
+# Stage 6 reads a BindCraft2 campaign's own output; this is where its summary
+# lands in the run directory.
+DESIGNS_FILE = "stage6_designs.json"
+
+# Existing binders mined from the PDB. NOT a pipeline stage and not a source
+# of designs - an explicitly requested comparison, kept under a name that
+# cannot be mistaken for pipeline output.
+REFERENCE_BINDERS_FILE = "reference_binders.json"
 
 
 @dataclass(frozen=True)

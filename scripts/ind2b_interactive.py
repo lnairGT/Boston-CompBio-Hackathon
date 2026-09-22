@@ -54,6 +54,8 @@ LAYERS: dict[str, list[str]] = {
     "residues": ["stage4_interface_residues.csv", "interface_residues.csv"],
     "interface_meta": ["stage4_interface_meta.json"],
     "specs_manifest": ["stage5_specs/manifest.json"],
+    "designs": ["stage6_designs.json"],
+    "reference_binders": ["reference_binders.json", "stage6_binders.json"],
     "run_manifest": ["run_manifest.json", "provenance.json"],
     "design_run": ["design_run.json"],
     "candidates": ["candidates.json", "candidates.csv"],
@@ -309,6 +311,192 @@ def svg_sequence_track(
     return "".join(parts)
 
 
+def svg_structure(projection: dict, width: int = 820, height: int = 380) -> str:
+    """Draw a persisted 2-D CA-trace projection of a target-binder complex.
+
+    This is a backbone schematic, not a molecular surface, and is labelled as
+    such: the projection was computed upstream (first two principal components
+    of the complex's CA coordinates) and stored, so the report draws from a
+    record rather than re-reading coordinates.
+    """
+    chains = projection.get("chains") or []
+    if not chains:
+        return ""
+    x0, y0, x1, y1 = projection.get("bounds") or [0, 0, 1, 1]
+    span_x, span_y = max(1e-6, x1 - x0), max(1e-6, y1 - y0)
+    pad = 26
+    scale = min((width - 2 * pad) / span_x, (height - 2 * pad) / span_y)
+    off_x = pad + ((width - 2 * pad) - span_x * scale) / 2
+    off_y = pad + ((height - 2 * pad) - span_y * scale) / 2
+
+    def px(p):
+        return (off_x + (p[0] - x0) * scale, off_y + (y1 - p[1]) * scale)
+
+    parts = [f'<svg viewBox="0 0 {width} {height}" class="chart struct" role="img" '
+             f'aria-label="backbone projection of the target-binder complex">']
+    # Binder behind, target in front, so highlighted epitope dots stay visible.
+    for chain in sorted(chains, key=lambda c: c["role"] != "binder"):
+        pts = [px(p) for p in chain["points"]]
+        if len(pts) < 2:
+            continue
+        path = "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+        if chain["role"] == "binder":
+            parts.append(
+                f'<path d="{path}" fill="none" stroke="#8250df" stroke-width="2.6" '
+                f'stroke-opacity="0.85" stroke-linejoin="round" '
+                f'data-tip="binder chain {esc(chain["chain"])} '
+                f'({len(chain["points"])} residues modelled)"/>'
+            )
+        else:
+            parts.append(
+                f'<path d="{path}" fill="none" stroke="#8c959f" stroke-width="1.8" '
+                f'stroke-opacity="0.75" stroke-linejoin="round" '
+                f'data-tip="target chain {esc(chain["chain"])} '
+                f'({len(chain["points"])} residues modelled)"/>'
+            )
+            flags = chain.get("flags") or []
+            resids = chain.get("residues") or []
+            for i, (x, y) in enumerate(pts):
+                flag = flags[i] if i < len(flags) else ""
+                if not flag:
+                    continue
+                rid = resids[i] if i < len(resids) else "?"
+                if flag == "hotspot":
+                    parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4.2" '
+                                 f'fill="#cf222e" data-tip="hotspot {esc(rid)}"/>')
+                else:
+                    parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.4" '
+                                 f'fill="#0969da" fill-opacity="0.75" '
+                                 f'data-tip="epitope residue {esc(rid)}"/>')
+    parts.append(
+        '<g class="legend">'
+        '<line x1="14" y1="12" x2="34" y2="12" stroke="#8250df" stroke-width="2.6"/>'
+        '<text x="39" y="16" class="svg-lbl">binder backbone</text>'
+        '<line x1="146" y1="12" x2="166" y2="12" stroke="#8c959f" stroke-width="1.8"/>'
+        '<text x="171" y="16" class="svg-lbl">target backbone</text>'
+        '<circle cx="288" cy="12" r="2.4" fill="#0969da" fill-opacity="0.75"/>'
+        '<text x="296" y="16" class="svg-lbl">epitope</text>'
+        '<circle cx="356" cy="12" r="4.2" fill="#cf222e"/>'
+        '<text x="366" y="16" class="svg-lbl">hotspot</text>'
+        "</g>"
+    )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+VENDOR_3DMOL = Path(__file__).resolve().parent / "vendor" / "3Dmol-min.js"
+
+
+def load_vendor_3dmol() -> str | None:
+    """The vendored 3Dmol.js source, or None if it is not present.
+
+    Vendored rather than fetched so a report renders offline and reproducibly.
+    Absence is handled by falling back to the built-in canvas viewer; it is
+    never fetched at render time and never at view time.
+    """
+    try:
+        return VENDOR_3DMOL.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def viewer_rich(
+    structure_text: str,
+    *,
+    vid: str,
+    target_chain: str,
+    binder_chains: Sequence[str],
+    epitope_auth: Sequence[str] = (),
+    hotspot_auth: Sequence[str] = (),
+    height: int = 420,
+) -> str:
+    """A cartoon-rendered, rotatable 3Dmol.js view of one complex.
+
+    Emits the structure inline and a small spec describing how to colour it.
+    Rendering is done by the vendored library at view time; if WebGL is
+    unavailable the surrounding markup reveals the canvas backbone viewer
+    instead, so the figure degrades rather than disappearing.
+    """
+    spec = {
+        "target_chain": target_chain,
+        "binder_chains": list(binder_chains),
+        "epitope": [str(r) for r in epitope_auth],
+        "hotspots": [str(r) for r in hotspot_auth],
+    }
+    return (
+        f'<div class="v3d-rich" id="{vid}-rich" data-spec="{vid}-spec" '
+        f'data-struct="{vid}-pdb" style="height:{height}px"></div>'
+        f'<script type="application/json" id="{vid}-spec">'
+        f'{json.dumps(spec, separators=(",", ":"))}</script>'
+        f'<script type="text/plain" id="{vid}-pdb">{esc(structure_text)}</script>'
+    )
+
+
+def viewer3d(
+    projection: dict,
+    vid: str,
+    height: int = 400,
+    *,
+    rich_structure: str | None = None,
+    rich_target_chain: str | None = None,
+    rich_binder_chains: Sequence[str] | None = None,
+    rich_epitope: Sequence[str] | None = None,
+    rich_hotspots: Sequence[str] | None = None,
+) -> str:
+    """A rotatable 3-D backbone view, plus the flat SVG as the print fallback.
+
+    The geometry is the persisted principal-axis frame from stage 6, embedded
+    as JSON and drawn on a canvas by the report's own code. There is no viewer
+    library to fetch, so the file stays self-contained and works offline; the
+    cost is that this draws a backbone trace, not cartoon ribbons or a
+    molecular surface. For publication-quality rendering, open the deposited
+    entry in PyMOL, ChimeraX or Mol*.
+    """
+    chains = projection.get("chains") or []
+    if not any(c.get("xyz") for c in chains):
+        # Older records carry only the flat projection: draw that rather than
+        # claim a 3-D view the data cannot support.
+        return svg_structure(projection)
+
+    payload = {
+        "radius": projection.get("radius") or 1.0,
+        "chains": [
+            {
+                "role": c["role"],
+                "chain": c["chain"],
+                "xyz": c["xyz"],
+                "residues": c.get("residues") or [],
+                "flags": c.get("flags") or [],
+            }
+            for c in chains
+        ],
+    }
+    data = json.dumps(payload, separators=(",", ":"))
+    rich = ""
+    if rich_structure:
+        rich = viewer_rich(
+            rich_structure, vid=vid, target_chain=rich_target_chain or "",
+            binder_chains=rich_binder_chains or [],
+            epitope_auth=rich_epitope or [], hotspot_auth=rich_hotspots or [],
+            height=height)
+    return (
+        rich
+        + f'<div class="viewer3d{" has-rich" if rich else ""}" '
+        f'data-payload="{vid}-data" style="height:{height}px">'
+        f'<canvas id="{vid}" height="{height}"></canvas>'
+        f'<div class="v3d-hint">drag to rotate &middot; scroll to zoom &middot; '
+        f'double-click to reset</div>'
+        f'<div class="v3d-legend">'
+        f'<span><i class="sw" style="background:#8250df"></i>binder</span>'
+        f'<span><i class="sw" style="background:#8c959f"></i>target</span>'
+        f'<span><i class="dot" style="background:#0969da"></i>epitope</span>'
+        f'<span><i class="dot" style="background:#cf222e"></i>hotspot</span>'
+        f"</div></div>"
+        f'<script type="application/json" id="{vid}-data">{data}</script>'
+        f'<div class="print-only">{svg_structure(projection)}</div>'
+    )
+
+
 def svg_residue_bars(rows: list[dict], width: int = 820, top: int = 16) -> str:
     """Buried area per interface residue, hotspots highlighted."""
     rows = [r for r in rows if r.get("delta_sasa") is not None][:top]
@@ -441,6 +629,38 @@ def pill(text: str, kind: str = "") -> str:
 # sections
 # --------------------------------------------------------------------------
 
+def _designed_stat(run: dict) -> tuple[str, str, str]:
+    """The 'binders designed' headline, read from the run rather than assumed.
+
+    This is the only place the report states design state, so it must not be
+    hardcoded: a run that later gains a design record has to be reported
+    honestly, and a design job that ran without succeeding yields no candidates.
+    """
+    dr = run.get("design_run") or {}
+    cands = run.get("candidates")
+    n_cand: int | None = None
+    if isinstance(cands, pd.DataFrame):
+        n_cand = len(cands)
+    elif isinstance(cands, list):
+        n_cand = len(cands)
+
+    state = dr.get("status") or dr.get("state")
+    if not dr and n_cand is None:
+        return ("binders designed", "0",
+                "specifications only; no design run in this directory")
+    if state and state != "succeeded":
+        return ("binders designed", "0",
+                f"design run {state} - a run that has not succeeded yields no "
+                f"candidates, and none are inferred from a partial run")
+    if n_cand is None:
+        return ("binders designed", "&mdash;",
+                f"design run {state or 'present'} but no candidate record found, "
+                f"so the count is unknown rather than zero")
+    return ("binder candidates", f"{n_cand:,}",
+            "a succeeded design job is not the same as a candidate passing "
+            "evaluation")
+
+
 def sec_overview(run: dict) -> str:
     d0 = run.get("disease") or {}
     ev = run.get("evidence") or {}
@@ -478,8 +698,7 @@ def sec_overview(run: dict) -> str:
         ("indication", esc(disease.get("name")), esc(disease.get("id"))),
         ("resolution rule", esc(d0.get("selection_rule")),
          "ambiguous" if d0.get("ambiguous") else "unambiguous"),
-        ("binders designed", "0",
-         "specifications only; no design run in this directory"),
+        _designed_stat(run),
     ]
     if isinstance(epi, pd.DataFrame) and n_epi_ok:
         ok = epi[epi["status"] == "accepted"]
@@ -942,38 +1161,397 @@ def sec_specs(run: dict) -> str:
                 note=note, sub=f'{sm.get("n_specs")} written')
 
 
-def sec_design_status(run: dict) -> str:
-    """State plainly whether anything was actually designed."""
-    dr = run.get("design_run")
-    cands = run.get("candidates")
-    sm = run.get("specs_manifest") or {}
-    if not dr and cands is None:
-        body = (
-            '<p class="verdict bad"><strong>Not end-to-end complete.</strong> '
-            'This run stops at specifications. No design job was executed, no binder '
-            'sequence exists, and no candidate has been evaluated.</p>'
-            '<p class="note">Writing a specification is not designing a binder. '
-            + (esc(sm.get("not_submitted", "")) if sm.get("not_submitted") else "")
-            + ' Running a campaign needs a GPU host; the decision belongs to whoever '
-              'reads the epitope shortlist.</p>'
-            '<p class="note">What this run does <strong>not</strong> establish: '
-            'that a ranked target is causal in the disease; that blocking the named '
-            'partner is therapeutic (partner relevance is inherited from an '
-            'interaction database, not curated per indication); or that any binder '
-            'can be made against these epitopes with useful affinity, specificity '
-            'or developability.</p>'
+def _rich_kwargs(run: dict, binder: dict) -> dict:
+    """Structure text and highlight lists for the cartoon viewer, if available."""
+    if run.get("_viewer_mode") == "light" or not run.get("_vendor_available"):
+        return {}
+    rel = binder.get("viewer_structure")
+    if not rel:
+        return {}
+    path = Path(run["_run_dir"]) / rel
+    try:
+        text = path.read_text()
+    except OSError:
+        return {}
+    proj = binder.get("projection") or {}
+    epi, hot = [], []
+    for chain in proj.get("chains") or []:
+        if chain.get("role") != "target":
+            continue
+        for rid, flag in zip(chain.get("residues") or [], chain.get("flags") or []):
+            if flag == "hotspot":
+                hot.append(rid)
+            elif flag == "epitope":
+                epi.append(rid)
+    fp = binder.get("footprint") or {}
+    run["_rich_emitted"] = (run.get("_rich_emitted") or 0) + 1
+    return {
+        "rich_structure": text,
+        "rich_target_chain": binder.get("target_chain"),
+        "rich_binder_chains": [fp.get("binder_chain_used")]
+        if fp.get("binder_chain_used") else [],
+        "rich_epitope": epi,
+        "rich_hotspots": hot,
+    }
+
+
+def sec_designs(run: dict) -> str:
+    """Binders this pipeline's own BindCraft2 campaigns produced, if any."""
+    rec = run.get("designs")
+    if not rec:
+        return absent_card(
+            "Designed binders",
+            "No stage 6 design record was found. Run `ind2b stage6` once a "
+            "BindCraft2 campaign has produced output; until then this pipeline "
+            "has designed nothing and nothing is shown in its place.")
+
+    if not rec.get("campaigns"):
+        return card("Designed binders",
+                    f'<p class="verdict bad"><strong>No binder has been designed.'
+                    f'</strong> {esc(rec.get("no_campaign_note"))}</p>'
+                    f'<p class="note">Searched: '
+                    f'{", ".join(f"<code>{esc(r)}</code>" for r in rec.get("searched_roots") or [])}. '
+                    f'This section fills in automatically once a campaign writes '
+                    f'results there &mdash; the report reads the campaign\'s own '
+                    f'tables rather than anything restated by hand.</p>')
+
+    body = f'<p class="note">{esc(rec.get("acceptance_meaning"))}</p>'
+    n_ladder = sum(c.get("n_on_ladder") or 0 for c in rec["campaigns"])
+    if n_ladder:
+        body += (
+            f'<p class="verdict warn"><strong>{n_ladder} accepted design(s) ran on '
+            f'the desperation ladder.</strong> Their attempt used settings easier '
+            f'than the campaign asked for (an <code>initial_guess</code>, relaxed '
+            f'<code>target_flexibility</code>, a different '
+            f'<code>validation_model</code>, or raised <code>design_recycles</code>), '
+            f'so their scores are not comparable with the rest and are flagged in '
+            f'the table.</p>')
+
+    for camp in rec["campaigns"]:
+        stages = camp.get("stages_present") or {}
+        stats = [
+            ("attempts", num(camp.get("n_attempts"), 0), "gradient-design attempts"),
+            ("scored", num(camp.get("n_candidates_scored"), 0), "ProteinMPNN candidates"),
+            ("accepted", num(camp.get("n_accepted"), 0), "passed configured filters"),
+        ]
+        block = (f'<h4><code>{esc(camp.get("campaign_name") or camp["project_folder"])}'
+                 f'</code></h4>' + stat_row(stats))
+        if not stages.get("ranked"):
+            block += ('<p class="absent">No ranked table: this campaign has not '
+                      'written an accepted design. A stage folder appears only '
+                      'once its first result exists, so its absence means the '
+                      'campaign did not get that far &mdash; not that the target '
+                      'is undesignable.</p>')
+        if camp.get("designs_note"):
+            block += f'<p class="absent">{esc(camp["designs_note"])}</p>'
+        if camp.get("failed_filter_tally"):
+            block += ("<h5>Why candidates were rejected</h5>"
+                      '<p class="note">Counts of failed filters across scored '
+                      'candidates. &ldquo;not measured&rdquo; is different from a '
+                      'low score.</p>'
+                      + table(f'tbl-ff-{slug(camp["project_folder"])}',
+                              [("failed filter", "text"), ("candidates", "num")],
+                              [[esc(k), num(v, 0)]
+                               for k, v in camp["failed_filter_tally"].items()],
+                              filter_label="Filter checks"))
+        if camp.get("match_note"):
+            block += f'<p class="absent">{esc(camp["match_note"])}</p>'
+
+        designs = camp.get("designs") or []
+        if designs:
+            headers = [("rank", "num"), ("design", "text"), ("length", "num"),
+                       ("requested hotspots", "num"), ("interface res", "num"),
+                       ("flags", "text")]
+            rows, details = [], []
+            for d in designs:
+                eng = d.get("vs_requested_epitope") or {}
+                flags = []
+                if d.get("ran_on_desperation_ladder"):
+                    flags.append(pill("easier task", "warn"))
+                if d.get("failed_filters"):
+                    flags.append(pill("filters noted", "warn"))
+                rows.append([
+                    num(d.get("rank"), 0),
+                    f'<code>{trunc(d.get("design"), 40)}</code>',
+                    num(d.get("binder_length"), 0),
+                    (pct(eng.get("fraction_hotspots_engaged"))
+                     if eng.get("comparable") else "&mdash;"),
+                    num(eng.get("n_interface_residues"), 0)
+                    if eng.get("comparable") else "&mdash;",
+                    " ".join(flags) or "",
+                ])
+                dd = ""
+                if d.get("binder_sequence"):
+                    seq = d["binder_sequence"]
+                    dd += ("<h5>Binder sequence</h5>"
+                           f'<pre class="code">{esc(seq)}</pre>'
+                           f'{copy_btn(seq, "copy sequence")}')
+                if eng.get("comparable"):
+                    dd += kv([
+                        ("requested hotspots engaged",
+                         f'<code>{esc(",".join(eng.get("hotspots_engaged") or []) or "none")}</code>'),
+                        ("requested hotspots missed",
+                         f'<code>{esc(",".join(eng.get("hotspots_missed") or []) or "none")}</code>'),
+                        ("target-side interface residues",
+                         f'<code>{esc(",".join(d.get("interface_target_residues") or []))}</code>'),
+                    ])
+                else:
+                    dd += (f'<p class="absent">{esc(eng.get("reason", "no comparison "
+                           "with the requested epitope was possible"))}.</p>')
+                if d.get("ran_on_desperation_ladder"):
+                    dd += (f'<p class="absent"><strong>Ran on the desperation '
+                           f'ladder.</strong> Autotuned settings: '
+                           f'<code>{esc(d.get("autotuned"))}</code>. This attempt '
+                           f'was given an easier problem than the campaign '
+                           f'specified, so its metrics are not comparable with '
+                           f'designs that ran the task as asked.</p>')
+                if d.get("failed_filters"):
+                    dd += kv([("filters noted", esc(d["failed_filters"]))])
+                metrics = {k: v for k, v in (d.get("metrics") or {}).items()
+                           if v is not None}
+                if metrics:
+                    dd += ("<h5>Reported metrics</h5>"
+                           '<p class="note">Every metric column the campaign '
+                           'wrote, blanks omitted rather than shown as zero. '
+                           '<code>rank</code> is a position in one ranking, not a '
+                           'probability of experimental success.</p>'
+                           + table(f'tbl-dm-{slug(d.get("design"))}',
+                                   [("metric", "text"), ("value", "num")],
+                                   [[esc(k), num(v, 4) if isinstance(v, float)
+                                     else esc(v)] for k, v in metrics.items()],
+                                   filter_label="Filter metrics"))
+                if d.get("structure_file"):
+                    dd += kv([("structure",
+                               f'<code>{esc(d["structure_file"])}</code> '
+                               f'<span class="dim">(in the campaign folder; '
+                               f'B-factors carry per-residue pLDDT on a 0-100 '
+                               f'scale, not experimental B-factors)</span>')])
+                details.append(dd)
+            block += table(f'tbl-designs-{slug(camp["project_folder"])}',
+                           headers, rows, details=details,
+                           filter_label="Filter designs")
+        body += f'<div class="example">{block}</div>'
+
+    return card("Designed binders", body,
+                sub=f'{rec.get("n_accepted_total")} accepted across '
+                    f'{rec.get("n_campaigns")} campaign(s)')
+
+
+def sec_binders(run: dict) -> str:
+    """Existing binders of these targets - none produced by this pipeline."""
+    rec = run.get("reference_binders")
+    if not rec:
+        return ""  # nothing to show, and nothing to stand in for it
+
+    designed_here = bool((run.get("designs") or {}).get("n_accepted_total"))
+    lead = (
+        '<p class="verdict warn"><strong>Reference molecules, not pipeline '
+        'output.</strong> Every binder below already exists &mdash; a designed '
+        'binder deposited in the PDB, or a clinical antibody. '
+        + ('They are shown alongside this run\'s own designs for comparison. '
+           if designed_here else
+           'They are shown because this run has designed nothing, and an existing '
+           'binder against the same surface is at least evidence that the surface '
+           'is <em>bindable</em> &mdash; which is not evidence that a new binder '
+           'against it will have useful affinity or specificity.</p>')
+    )
+    if designed_here:
+        lead += ('Do not read them as this pipeline\'s results.</p>')
+
+    # Mini-binder-scale designs are the ones comparable to a BindCraft2 output.
+    minis = [
+        (t, b) for t in rec["targets"] for b in t["binders"]
+        if b.get("is_minibinder_scale") and (b.get("vs_selected_epitope") or {}).get("comparable")
+    ]
+    covered = [
+        (t, b) for t, b in minis
+        if (b["vs_selected_epitope"].get("fraction_of_hotspots_covered") or 0) >= 0.99
+    ]
+    if minis:
+        lead += (
+            f'<p class="note">Of the {len(minis)} published de novo binder(s) at '
+            f'mini-binder scale (&le; {esc(rec.get("minibinder_max_residues"))} residues) '
+            f'whose footprint could be mapped, <strong>{len(covered)}</strong> engage every '
+            f'hotspot this pipeline selected for that target. Larger designed scaffolds '
+            f'(DARPins and designed scFvs) in the table below mostly do not &mdash; they '
+            f'were raised against other surfaces. Read a zero there carefully: where '
+            f'the deposited construct does not even contain the selected epitope, '
+            f'the zero is silence about that surface rather than evidence against '
+            f'it, and the row says which case applies.</p>'
+            '<p class="note">Calibrate that agreement honestly: these are the '
+            'canonical ligand-binding interfaces of well-studied receptors, which '
+            'is where both a human designer and this pipeline would look first. '
+            'Convergence on them is a sanity check that the epitope selection is '
+            'not eccentric &mdash; it is not evidence that the pipeline finds '
+            'non-obvious sites, and it does not extend to the targets here that '
+            'have no published designed binder.</p>'
         )
-        return card("Design status", body)
-    state = (dr or {}).get("status") or (dr or {}).get("state")
-    kind = "ok" if state == "succeeded" else "warn"
-    body = f'<p class="verdict {kind}">Design run status: {pill(str(state), kind)}</p>'
-    if state != "succeeded":
-        body += ('<p class="note">A design run that has not succeeded does not yield '
-                 'candidates; nothing is inferred from a partial run.</p>')
+
+    # --- example structures
+    examples = [
+        (t, b) for t in rec["targets"] for b in t["binders"] if b.get("projection")
+    ]
+    examples.sort(key=lambda tb: (not tb[1].get("is_minibinder_scale"),
+                                   tb[1].get("resolution") or 99.0))
+    gallery = ""
+    for t, b in examples:
+        cmp_ = b.get("vs_selected_epitope") or {}
+        fp = b.get("footprint") or {}
+        sel = b.get("selected_epitope") or {}
+        cov = cmp_.get("fraction_of_hotspots_covered")
+        headline = (
+            f'{t["symbol"]} &mdash; {esc(b["binder_descriptions"][0])}'
+            if b.get("binder_descriptions") else f'{t["symbol"]} binder'
+        )
+        badge = (pill(f'{b["binder_length"]} aa', "ok" if b.get("is_minibinder_scale") else "")
+                 + " " + pill(b["kind"], "ok" if b["kind"] == "designed" else ""))
+        note = None
+        if cmp_.get("comparable"):
+            if cov is not None and cov >= 0.99:
+                note = (f'<span class="ok-text">This binder covers every hotspot '
+                        f'selected for {esc(t["symbol"])}</span> '
+                        f'({esc(",".join(str(h) for h in cmp_.get("hotspots_covered") or []))}), '
+                        f'sharing {cmp_["n_shared"]} interface positions '
+                        f'(Jaccard {num(cmp_["jaccard"], 2)}) with the epitope taken from '
+                        f'<code>{esc(sel.get("entry_id"))}</code> vs '
+                        f'{esc(sel.get("partner_symbol"))}.')
+            elif cov is not None:
+                note = (f'Covers {pct(cov)} of the selected hotspots '
+                        f'({cmp_["n_shared"]} shared positions, Jaccard '
+                        f'{num(cmp_["jaccard"], 2)}) &mdash; this binder engages a '
+                        f'largely different surface from the one selected here.')
+        body = (
+            f'<div class="card-head"><h4 style="margin:0">{headline}</h4>'
+            f'<span class="sub">{badge}</span></div>'
+            + (f'<p class="note">{note}</p>' if note else "")
+            + viewer3d(
+                b["projection"],
+                f'v3d-{slug(t["symbol"])}-{slug(b["entry_id"])}',
+                **_rich_kwargs(run, b))
+            + f'<p class="caption">Backbone schematic of <code>{esc(b["entry_id"])}</code> '
+              f'at {num(b.get("resolution"), 2)}&#8491;, projected onto the complex\'s two '
+              f'principal axes. Lines trace C&alpha; positions only &mdash; this is not a '
+              f'molecular surface, and apparent gaps are unmodelled residues. Highlighted '
+              f'residues are the {esc(b["projection"].get("epitope_source", "epitope"))}. '
+              f'Footprint buries {num(fp.get("buried_area_total"), 0)}&#8491;&sup2; over '
+              f'{esc(fp.get("n_footprint_residues"))} residues.</p>'
+        )
+        gallery += f'<div class="example">{body}</div>'
+
+    if gallery:
+        gallery = ('<h4>Example complexes</h4>' + gallery)
     else:
-        body += ('<p class="note">A succeeded compute job is not the same as a candidate '
-                 'passing evaluation.</p>')
-    return card("Design status", body)
+        gallery = ('<p class="absent">No example complex could be projected, so no '
+                   'structure is drawn here.</p>')
+
+    # --- full table
+    headers = [("target", "text"), ("kind", "text"), ("binder", "text"),
+               ("PDB", "text"), ("res &#8491;", "num"), ("binder aa", "num"),
+               ("buried &#8491;&sup2;", "num"), ("shared", "num"),
+               ("hotspots covered", "num")]
+    rows, details = [], []
+    for t in rec["targets"]:
+        for b in t["binders"]:
+            cmp_ = b.get("vs_selected_epitope") or {}
+            fp = b.get("footprint") or {}
+            cov = cmp_.get("fraction_of_hotspots_covered")
+            rows.append([
+                f'<strong>{esc(t["symbol"])}</strong>',
+                pill(b["kind"], "ok" if b["kind"] == "designed" else ""),
+                trunc((b.get("binder_descriptions") or [None])[0], 34),
+                f'<code>{esc(b["entry_id"])}</code>',
+                num(b.get("resolution"), 2),
+                num(b.get("binder_length"), 0),
+                num(fp.get("buried_area_total"), 0),
+                num(cmp_.get("n_shared"), 0) if cmp_.get("comparable") else "&mdash;",
+                pct(cov) if cov is not None else "&mdash;",
+            ])
+            d = ""
+            if not fp:
+                d += ('<p class="absent">The target-side footprint could not be '
+                      'computed for this complex, so no comparison with the selected '
+                      'epitope is shown.</p>')
+            elif not cmp_.get("comparable"):
+                d += (f'<p class="absent">Not comparable: '
+                      f'{esc(cmp_.get("reason", "footprint could not be mapped"))}.</p>')
+            else:
+                d += kv([
+                    ("shared positions",
+                     f'<code>{esc(",".join(str(x) for x in cmp_.get("shared_positions") or []))}</code>'),
+                    ("hotspots covered",
+                     f'<code>{esc(",".join(str(x) for x in cmp_.get("hotspots_covered") or []) or "none")}</code>'),
+                    ("hotspots missed",
+                     f'<code>{esc(",".join(str(x) for x in cmp_.get("hotspots_missed") or []) or "none")}</code>'),
+                    ("Jaccard overlap", num(cmp_.get("jaccard"), 3)),
+                    ("epitope covered", pct(cmp_.get("fraction_of_epitope_covered"))),
+                    ("selected epitope in this construct",
+                     (pill("yes", "ok") if cmp_.get("epitope_present_in_construct")
+                      else pill("no", "warn"))
+                     + f' <span class="dim">({esc(cmp_.get("n_epitope_positions_in_construct"))} '
+                       f'of its positions modelled here)</span>'),
+                    ("how to read the overlap", esc(cmp_.get("interpretation"))),
+                ])
+            if fp:
+                top = fp.get("top_residues") or []
+                if top:
+                    d += ("<h5>Most-buried footprint residues</h5>" + table(
+                        f'tbl-bfp-{slug(t["symbol"])}-{slug(b["entry_id"])}-{slug(b["kind"])}',
+                        [("residue", "text"), ("UniProt", "num"),
+                         ("buried &#8491;&sup2;", "num"), ("contact", "text")],
+                        [[f'{esc(x.get("residue"))}<strong>{esc(x.get("auth_seq_id"))}</strong>',
+                          num(x.get("uniprot_pos"), 0), num(x.get("delta_sasa"), 1),
+                          pill("yes", "ok") if x.get("is_contact") else pill("no")]
+                         for x in top],
+                        filter_label="Filter residues"))
+            d += kv([
+                ("entry title", esc(b.get("title"))),
+                ("method", esc(b.get("method"))),
+                ("binder chains", esc(", ".join(b.get("binder_chains") or []))),
+                ("chain used for footprint", esc(fp.get("binder_chain_used"))),
+                ("construct UniProt range",
+                 (f'{esc((fp.get("construct_uniprot_range") or [None, None])[0])}'
+                  f'&ndash;{esc((fp.get("construct_uniprot_range") or [None, None])[1])}'
+                  f' <span class="dim">({esc(fp.get("n_construct_residues_mapped"))} '
+                  f'residues mapped)</span>')
+                 if fp.get("construct_uniprot_range") else "&mdash;"),
+                ("mini-binder scale",
+                 pill("yes", "ok") if b.get("is_minibinder_scale") else pill("no")),
+            ])
+            details.append(d)
+
+    clinical_rows = []
+    for t in rec["targets"]:
+        for d in t.get("clinical_binders") or []:
+            clinical_rows.append([
+                f'<strong>{esc(t["symbol"])}</strong>',
+                esc(d.get("drug")),
+                esc(d.get("drug_type")),
+                pill(str(d.get("max_clinical_stage")),
+                     "ok" if d.get("max_clinical_stage") == "APPROVAL" else "warn"),
+            ])
+
+    body = lead + gallery
+    if rows:
+        body += ("<h4>All analysed binder complexes</h4>"
+                 '<p class="note">One complex per binder kind per target, best resolved '
+                 'first. Click a row for the shared positions and the most-buried '
+                 'footprint residues.</p>'
+                 + table("tbl-binders", headers, rows, details=details,
+                         filter_label="Filter by target, PDB id, kind..."))
+    if clinical_rows:
+        body += ("<h4>Clinical binders recorded for these targets</h4>"
+                 '<p class="note">Biologic drugs from the run\'s own drug-precedent '
+                 'layer. These are molecules in development or approved, not designs, '
+                 'and their epitopes are not computed here unless a structure appears '
+                 'in the table above.</p>'
+                 + table("tbl-clin",
+                         [("target", "text"), ("drug", "text"), ("modality", "text"),
+                          ("stage", "text")],
+                         clinical_rows, filter_label="Filter drugs"))
+    return card("Reference binders (not designed here)", body,
+                note=esc(rec.get("not_our_designs")),
+                sub=f'{rec.get("n_with_designed")} of {rec.get("n_targets")} '
+                    f'targets have a designed binder in the PDB')
 
 
 def sec_methods(run: dict) -> str:
@@ -1084,7 +1662,33 @@ tr.detail{display:none}
 tr.detail.open{display:table-row}
 tr.detail td{background:#fbfcfd;border-bottom:1px solid var(--border)}
 .detail-in{padding:6px 2px 10px}
+.v3d-rich{position:relative;width:100%;background:#fff;
+border:1px solid var(--border);border-radius:6px;margin:6px 0 4px;overflow:hidden}
+.v3d-rich canvas{border-radius:6px}
+.v3d-reset{position:absolute;top:8px;right:10px;z-index:5;padding:2px 9px;
+font-size:11.5px;border-radius:5px;border:1px solid var(--border);
+background:rgba(255,255,255,.9);color:var(--muted);cursor:pointer}
+.v3d-reset:hover{color:var(--text)}
+.viewer3d{position:relative;background:#fff;border:1px solid var(--border);
+border-radius:6px;margin:6px 0 4px;overflow:hidden}
+.viewer3d canvas{display:block;width:100%;cursor:grab;touch-action:none}
+.viewer3d canvas:active{cursor:grabbing}
+.v3d-hint{position:absolute;bottom:6px;right:10px;font-size:11.5px;
+color:var(--muted);background:rgba(255,255,255,.82);padding:2px 7px;
+border-radius:99px;pointer-events:none}
+.v3d-legend{position:absolute;top:8px;left:10px;display:flex;gap:12px;
+font-size:11.5px;color:var(--muted);background:rgba(255,255,255,.82);
+padding:3px 9px;border-radius:99px;pointer-events:none}
+.v3d-legend i{display:inline-block;margin-right:4px;vertical-align:middle}
+.v3d-legend .sw{width:14px;height:3px;border-radius:2px}
+.v3d-legend .dot{width:8px;height:8px;border-radius:50%}
+.print-only{display:none}
 .dim{color:var(--muted)}
+.ok-text{color:var(--ok);font-weight:550}
+.caption{color:var(--muted);font-size:12.5px;margin:2px 0 10px;max-width:70ch}
+.example{border:1px solid var(--border);border-radius:6px;padding:12px 14px;
+margin:10px 0;background:#fbfcfd}
+.struct{background:#fff;border:1px solid #eaeef2;border-radius:6px}
 .pill{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11.5px;
 font-weight:550;background:#eaeef2;color:#424a53;white-space:nowrap}
 .pill.ok{background:#dafbe1;color:#0f5323}
@@ -1112,6 +1716,7 @@ font-size:12.5px}
 @media (max-width:720px){.kv-row{grid-template-columns:1fr}
 .top-in,main{padding-left:14px;padding-right:14px}}
 @media print{header.top{position:static}nav{display:none}
+.viewer3d,.v3d-rich{display:none}.print-only{display:block}
 .card{break-inside:avoid;box-shadow:none}tr.detail{display:table-row}}
 """
 
@@ -1217,8 +1822,202 @@ function navInit(){
   window.addEventListener('scroll',onScroll,{passive:true});
   onScroll();
 }
+
+function initViewers(){
+  var boxes = document.querySelectorAll('.viewer3d');
+  for (var bi=0; bi<boxes.length; bi++) initViewer(boxes[bi]);
+}
+function initViewer(box){
+  var canvas = box.querySelector('canvas');
+  var node = document.getElementById(box.getAttribute('data-payload'));
+  if(!canvas || !node) return;
+  var data;
+  try{ data = JSON.parse(node.textContent); }catch(e){ return; }
+
+  // rotation matrix, row-major; identity means the stored principal-axis view
+  var R = [1,0,0, 0,1,0, 0,0,1];
+  var zoom = 1, drag = null;
+
+  function mul(a,b){
+    var o = new Array(9);
+    for(var i=0;i<3;i++) for(var j=0;j<3;j++){
+      o[i*3+j] = a[i*3]*b[j] + a[i*3+1]*b[3+j] + a[i*3+2]*b[6+j];
+    }
+    return o;
+  }
+  function rotY(t){ var c=Math.cos(t),s=Math.sin(t); return [c,0,s, 0,1,0, -s,0,c]; }
+  function rotX(t){ var c=Math.cos(t),s=Math.sin(t); return [1,0,0, 0,c,-s, 0,s,c]; }
+
+  function draw(){
+    var dpr = window.devicePixelRatio || 1;
+    var w = box.clientWidth, h = box.clientHeight;
+    canvas.width = Math.round(w*dpr); canvas.height = Math.round(h*dpr);
+    canvas.style.width = w+'px'; canvas.style.height = h+'px';
+    var ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,w,h);
+
+    var scale = 0.42 * Math.min(w,h) / (data.radius || 1) * zoom;
+    var cx = w/2, cy = h/2;
+    var items = [];
+
+    for(var ci=0; ci<data.chains.length; ci++){
+      var ch = data.chains[ci];
+      var pts = [];
+      for(var i=0;i<ch.xyz.length;i++){
+        var p = ch.xyz[i];
+        var x = R[0]*p[0] + R[1]*p[1] + R[2]*p[2];
+        var y = R[3]*p[0] + R[4]*p[1] + R[5]*p[2];
+        var z = R[6]*p[0] + R[7]*p[1] + R[8]*p[2];
+        pts.push([cx + x*scale, cy - y*scale, z]);
+      }
+      var isBinder = ch.role === 'binder';
+      for(var k=0;k+1<pts.length;k++){
+        var a = pts[k], b2 = pts[k+1];
+        // Break the trace across chain gaps rather than drawing a long
+        // spurious bond through the structure.
+        var dx=a[0]-b2[0], dy=a[1]-b2[1], dz=(a[2]-b2[2])*scale;
+        if(Math.sqrt(dx*dx+dy*dy+dz*dz) > 9*scale) continue;
+        items.push({z:(a[2]+b2[2])/2, kind:'seg', a:a, b:b2, binder:isBinder});
+      }
+      for(var m=0;m<pts.length;m++){
+        var f = ch.flags[m];
+        if(f) items.push({z:pts[m][2], kind:f, p:pts[m],
+                          label:(ch.residues[m]||'')});
+      }
+    }
+    items.sort(function(p1,p2){ return p1.z - p2.z; });
+
+    var rad = data.radius || 1;
+    for(var n=0;n<items.length;n++){
+      var it = items[n];
+      // depth cue: nearer geometry is drawn more opaque
+      var t = (it.z/rad + 1)/2; if(t<0)t=0; if(t>1)t=1;
+      if(it.kind === 'seg'){
+        ctx.globalAlpha = 0.28 + 0.62*t;
+        ctx.strokeStyle = it.binder ? '#8250df' : '#8c959f';
+        ctx.lineWidth = (it.binder ? 2.8 : 1.9) * (0.75 + 0.5*t);
+        ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(it.a[0],it.a[1]); ctx.lineTo(it.b[0],it.b[1]);
+        ctx.stroke();
+      }else{
+        var hot = it.kind === 'hotspot';
+        ctx.globalAlpha = 0.45 + 0.55*t;
+        ctx.fillStyle = hot ? '#cf222e' : '#0969da';
+        ctx.beginPath();
+        ctx.arc(it.p[0], it.p[1], (hot?4.6:2.6)*(0.8+0.4*t), 0, 6.2832);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function at(e){
+    var r = canvas.getBoundingClientRect();
+    var t = e.touches ? e.touches[0] : e;
+    return {x:t.clientX - r.left, y:t.clientY - r.top};
+  }
+  function down(e){ drag = at(e); }
+  function move(e){
+    if(!drag) return;
+    var q = at(e), dx = q.x-drag.x, dy = q.y-drag.y;
+    drag = q;
+    R = mul(mul(rotY(dx*0.01), rotX(dy*0.01)), R);
+    draw();
+    if(e.cancelable) e.preventDefault();
+  }
+  function up(){ drag = null; }
+
+  canvas.addEventListener('mousedown', down);
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', up);
+  canvas.addEventListener('touchstart', down, {passive:true});
+  canvas.addEventListener('touchmove', move, {passive:false});
+  canvas.addEventListener('touchend', up);
+  canvas.addEventListener('wheel', function(e){
+    zoom *= (e.deltaY < 0 ? 1.12 : 0.89);
+    if(zoom < 0.3) zoom = 0.3;
+    if(zoom > 6) zoom = 6;
+    draw(); e.preventDefault();
+  }, {passive:false});
+  canvas.addEventListener('dblclick', function(){
+    R = [1,0,0, 0,1,0, 0,0,1]; zoom = 1; draw();
+  });
+  window.addEventListener('resize', draw);
+  draw();
+}
+
+function webglAvailable(){
+  try{
+    var c = document.createElement('canvas');
+    return !!(window.WebGLRenderingContext &&
+      (c.getContext('webgl') || c.getContext('experimental-webgl')));
+  }catch(e){ return false; }
+}
+function initRichViewers(){
+  var boxes = document.querySelectorAll('.v3d-rich');
+  // No library or no WebGL: leave the canvas backbone viewers visible. The
+  // figure degrades to a simpler drawing rather than disappearing.
+  var ok = (typeof window.$3Dmol !== 'undefined') && webglAvailable();
+  if(!ok){
+    for(var i=0;i<boxes.length;i++){
+      boxes[i].style.display = 'none';
+      var note = document.createElement('p');
+      note.className = 'note';
+      note.textContent = ok ? '' :
+        'Cartoon rendering needs WebGL, which this browser did not provide. ' +
+        'Showing the backbone trace instead.';
+      if(!ok && boxes[i].parentNode) boxes[i].parentNode.insertBefore(note, boxes[i]);
+    }
+    return;
+  }
+  for(var b=0;b<boxes.length;b++) initRich(boxes[b]);
+}
+function initRich(box){
+  var specNode = document.getElementById(box.getAttribute('data-spec'));
+  var pdbNode = document.getElementById(box.getAttribute('data-struct'));
+  if(!specNode || !pdbNode) return;
+  var spec, pdb;
+  try{ spec = JSON.parse(specNode.textContent); }catch(e){ return; }
+  pdb = pdbNode.textContent;
+  var viewer;
+  try{
+    viewer = $3Dmol.createViewer(box, {backgroundColor:'white', antialias:true});
+    viewer.addModel(pdb, 'pdb');
+  }catch(e){ box.style.display='none'; return; }
+
+  var T = spec.target_chain, B = spec.binder_chains || [];
+  viewer.setStyle({}, {cartoon:{color:'#c9d1d9', opacity:0.95}});
+  viewer.setStyle({chain:T}, {cartoon:{color:'#8c959f'}});
+  for(var i=0;i<B.length;i++){
+    viewer.setStyle({chain:B[i]}, {cartoon:{color:'#8250df'}});
+  }
+  if(spec.epitope && spec.epitope.length){
+    viewer.setStyle({chain:T, resi:spec.epitope},
+                    {cartoon:{color:'#0969da'},
+                     stick:{radius:0.12, color:'#0969da'}});
+  }
+  if(spec.hotspots && spec.hotspots.length){
+    viewer.setStyle({chain:T, resi:spec.hotspots},
+                    {cartoon:{color:'#cf222e'},
+                     stick:{radius:0.2, color:'#cf222e'}});
+    viewer.addStyle({chain:T, resi:spec.hotspots, atom:'CA'},
+                    {sphere:{radius:0.9, color:'#cf222e'}});
+  }
+  viewer.zoomTo();
+  viewer.render();
+  // Hide the canvas fallback only once the rich view has actually rendered.
+  var fallback = box.parentNode && box.parentNode.querySelector('.viewer3d.has-rich');
+  if(fallback) fallback.style.display = 'none';
+  var reset = document.createElement('button');
+  reset.className = 'v3d-reset'; reset.type = 'button'; reset.textContent = 'reset view';
+  reset.onclick = function(){ viewer.zoomTo(); viewer.render(); };
+  box.appendChild(reset);
+  window.addEventListener('resize', function(){ viewer.resize(); viewer.render(); });
+}
+
 window.addEventListener('DOMContentLoaded',function(){
-  tipInit(); navInit();
+  tipInit(); navInit(); initViewers(); initRichViewers();
   document.querySelectorAll('table.grid').forEach(function(t){
     filterTable(t.id,'');
     var s=t.getAttribute('data-sort');
@@ -1228,12 +2027,22 @@ window.addEventListener('DOMContentLoaded',function(){
 """
 
 
-def build(run_dir: str | Path, out_path: str | Path, title: str | None = None) -> dict:
+def build(run_dir: str | Path, out_path: str | Path, title: str | None = None,
+          viewer: str = "auto") -> dict:
     """Render ``run_dir`` to a single self-contained interactive HTML file."""
     run_dir = Path(run_dir)
     if not run_dir.is_dir():
         raise NotADirectoryError(f"{run_dir} is not a directory")
+    if viewer not in ("auto", "rich", "light"):
+        raise ValueError("viewer must be one of: auto, rich, light")
     run = load_run(run_dir)
+    vendor = None if viewer == "light" else load_vendor_3dmol()
+    if viewer == "rich" and vendor is None:
+        raise FileNotFoundError(
+            f"viewer='rich' requires the vendored library at {VENDOR_3DMOL}")
+    run["_viewer_mode"] = "light" if vendor is None else viewer
+    run["_vendor_available"] = vendor is not None
+    run["_rich_emitted"] = 0
 
     disease = ((run.get("disease") or {}).get("disease") or {})
     heading = title or (
@@ -1243,16 +2052,19 @@ def build(run_dir: str | Path, out_path: str | Path, title: str | None = None) -
 
     sections = [
         ("overview", "Overview", sec_overview(run)),
-        ("status", "Design status", sec_design_status(run)),
         ("disease", "Indication", sec_disease(run)),
         ("targets", "Targets", sec_targets(run)),
         ("rubric", "Rubric", sec_rubric(run)),
         ("complexes", "Complex gate", sec_complexes(run)),
         ("epitopes", "Epitopes", sec_epitopes(run)),
         ("specs", "Specifications", sec_specs(run)),
+        ("designs", "Designed binders", sec_designs(run)),
+        ("reference", "Reference binders", sec_binders(run)),
         ("methods", "Methods", sec_methods(run)),
         ("provenance", "Provenance", sec_provenance(run)),
     ]
+
+    sections = [(sid, label, blk) for sid, label, blk in sections if blk.strip()]
 
     missing = missing_layers(run)
     banner = ""
@@ -1266,6 +2078,14 @@ def build(run_dir: str | Path, out_path: str | Path, title: str | None = None) -
             f'they are placeholders for wiring, not biological results, and nothing '
             f'derived from them is a finding.</div>'
         )
+
+    # Inline the library only when a rich viewer was actually emitted, so a
+    # run with nothing to show in 3-D does not carry half a megabyte.
+    vendor_block = ""
+    if vendor and run.get("_rich_emitted"):
+        vendor_block = (
+            "<!-- 3Dmol.js, BSD-3-Clause, vendored: see scripts/vendor/VERSION.json -->"
+            f"<script>{vendor}</script>")
 
     nav = "".join(
         f'<a href="#{sid}">{esc(label)}</a>' for sid, label, _ in sections
@@ -1297,6 +2117,7 @@ exists for any epitope shown.</p>
 </main>
 <div id="tip" role="tooltip"></div>
 <script>{JS}</script>
+{vendor_block}
 </body></html>
 """
     out_path = Path(out_path)
@@ -1306,6 +2127,8 @@ exists for any epitope shown.</p>
     return {
         "out": str(out_path),
         "bytes": out_path.stat().st_size,
+        "viewer_mode": run.get("_viewer_mode"),
+        "n_rich_viewers": run.get("_rich_emitted"),
         "layers": sorted(k for k in run if not k.startswith("_")),
         "missing": missing,
         "n_sections": len(sections),
@@ -1323,9 +2146,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument("--run-dir", required=True, type=Path)
     p.add_argument("--out", type=Path, default=None)
     p.add_argument("--title", default=None)
+    p.add_argument("--viewer", choices=("auto", "rich", "light"), default="auto",
+                   help="auto (default): cartoon rendering where a structure is "
+                        "available, backbone trace otherwise; rich: require the "
+                        "vendored library; light: backbone trace only, smallest file")
     args = p.parse_args(argv)
     out = args.out or Path(f"{args.run_dir.name}_report.html")
-    result = build(args.run_dir, out, title=args.title)
+    result = build(args.run_dir, out, title=args.title, viewer=args.viewer)
     print(json.dumps(result, indent=2))
     return 0
 

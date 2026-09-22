@@ -181,6 +181,80 @@ def cmd_stage5(args) -> int:
     return 0
 
 
+def cmd_stage6(args) -> int:
+    """Read what a BindCraft2 campaign actually designed."""
+    from . import stage5_specs, stage6_designs
+
+    run_dir = _resolve_run_dir(args, efo_id=args.efo_id)
+    try:
+        manifest = stage5_specs.read(run_dir)
+    except FileNotFoundError:
+        manifest = None
+    record = stage6_designs.run(
+        run_dir,
+        project_folders=[Path(p) for p in (args.project_folder or [])],
+        specs_manifest=manifest,
+        max_designs=args.max_designs,
+    )
+    path = stage6_designs.write(record, run_dir)
+
+    if not record["campaigns"]:
+        print(record["no_campaign_note"])
+        print(f"\nsearched: {', '.join(record['searched_roots'])}")
+        print(f"written: {path}")
+        return 0
+
+    print(f"{record['n_campaigns']} campaign(s), "
+          f"{record['n_accepted_total']} accepted design(s)")
+    for c in record["campaigns"]:
+        print(f"\n{c['project_folder']}")
+        print(f"  attempts {c['n_attempts']} | scored {c['n_candidates_scored']} "
+              f"| accepted {c['n_accepted']}")
+        if c.get("failed_filter_tally"):
+            print(f"  failed filters: {c['failed_filter_tally']}")
+        for d in c["designs"][:args.top]:
+            eng = d.get("vs_requested_epitope") or {}
+            hit = (f"{eng['n_hotspots_engaged']}/{eng['n_requested']} requested hotspots"
+                   if eng.get("comparable") else "hotspot comparison unavailable")
+            ladder = "  [ran on desperation ladder]" if d["ran_on_desperation_ladder"] else ""
+            print(f"    {str(d['design'])[:44]:<46} {d['binder_length']}aa  {hit}{ladder}")
+    print(f"\n{record['acceptance_meaning']}")
+    print(f"written: {path}")
+    return 0
+
+
+def cmd_reference_binders(args) -> int:
+    """Mine the PDB for binders that already exist. Not a design step."""
+    from . import (reference_binders, stage1_evidence, stage3_complexes,
+                   stage4_interface)
+
+    run_dir = _resolve_run_dir(args, efo_id=args.efo_id)
+    complexes = stage3_complexes.read(run_dir)
+    epitopes = stage4_interface.read(run_dir)
+    evidence = stage1_evidence.read(run_dir)
+    record = reference_binders.run(
+        complexes, epitopes, evidence, run_dir=run_dir,
+        max_per_kind=args.max_per_kind)
+    record = reference_binders.add_projections(
+        record, run_dir, epitopes, max_examples=args.max_projections)
+    path = reference_binders.write(record, run_dir)
+
+    print(f"{record['n_with_designed']} of {record['n_targets']} targets have a "
+          f"designed-binder complex in the PDB")
+    for t in record["targets"]:
+        for b in t["binders"]:
+            cmp_ = b.get("vs_selected_epitope") or {}
+            shared = (f'{cmp_["n_shared"]} shared, '
+                      f'{cmp_["fraction_of_hotspots_covered"]:.0%} of hotspots'
+                      if cmp_.get("comparable") and
+                      cmp_.get("fraction_of_hotspots_covered") is not None
+                      else "not comparable")
+            print(f"  {t['symbol']:<8} {b['kind']:<9} {b['entry_id']} "
+                  f"{b['resolution']}A  binder {b['binder_length']}aa  -> {shared}")
+    print(f"\nNone of these binders was designed by this pipeline. {path}")
+    return 0
+
+
 def cmd_schema_check(args) -> int:
     """Verify the Open Targets field names this package queries still exist."""
     from .sources import opentargets as ot
@@ -266,6 +340,30 @@ def build_parser() -> argparse.ArgumentParser:
     s5.add_argument("--top-n", type=int, default=None, help="emit only the top N")
     _add_common(s5)
     s5.set_defaults(func=cmd_stage5)
+
+    s6 = sub.add_parser(
+        "stage6", help="read the binders a BindCraft2 campaign designed")
+    s6.add_argument("--efo-id", default=None, help="disease id (locates the run directory)")
+    s6.add_argument("--project-folder", action="append", default=None,
+                     help="BindCraft2 project_folder to read (repeatable); "
+                          "defaults to results/ and campaigns/ under the run dir")
+    s6.add_argument("--max-designs", type=int, default=25,
+                     help="accepted designs to record per campaign")
+    s6.add_argument("--top", type=int, default=5, help="designs to print per campaign")
+    _add_common(s6)
+    s6.set_defaults(func=cmd_stage6)
+
+    rb = sub.add_parser(
+        "reference-binders",
+        help="mine the PDB for binders that already exist (comparison only, "
+             "not a design step and not part of `all`)")
+    rb.add_argument("--efo-id", default=None, help="disease id (locates the run directory)")
+    rb.add_argument("--max-per-kind", type=int, default=1,
+                     help="complexes to analyse per binder kind per target")
+    rb.add_argument("--max-projections", type=int, default=6,
+                     help="example complexes to project for drawing")
+    _add_common(rb)
+    rb.set_defaults(func=cmd_reference_binders)
 
     sc = sub.add_parser("schema-check", help="verify upstream GraphQL field names")
     _add_common(sc)
