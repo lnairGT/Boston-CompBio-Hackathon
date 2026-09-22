@@ -29,7 +29,6 @@ _RATE_LIMITS: dict[str, float] = {
     "rest.uniprot.org": 0.20,
     "www.ebi.ac.uk": 0.34,
     "clinicaltrials.gov": 0.34,
-    "api.openalex.org": 0.15,
 }
 _DEFAULT_RATE = 0.25
 _last_call: dict[str, float] = {}

@@ -61,6 +61,50 @@ def cmd_stage0(args) -> int:
     return 0
 
 
+def cmd_stage1(args) -> int:
+    from . import stage0_resolve, stage1_evidence
+
+    run_dir = _resolve_run_dir(args, efo_id=args.efo_id)
+    d0 = stage0_resolve.read(run_dir)
+    record = stage1_evidence.fetch(
+        d0["disease"]["id"],
+        disease_name=d0["disease"]["name"],
+        n_targets=args.n_targets,
+        all_layers=args.all_layers,
+    )
+    path = stage1_evidence.write(record, run_dir)
+
+    print(f"disease   : {d0['disease']['id']}  {d0['disease']['name']}")
+    print(f"pool      : {record['pool_size']} of {record['association_total']} associated targets")
+    print(f"reachable : {record['n_surface_accessible']} (UniProt topology)")
+    disagree = [
+        t for t in record["targets"]
+        if not t["location_keyword_hint"]["agrees_with_topology"]
+    ]
+    print(f"  keyword-hint disagreements: {len(disagree)}")
+    print(f"written   : {path}")
+    return 0
+
+
+def cmd_stage2(args) -> int:
+    from . import stage1_evidence, stage2_score
+
+    run_dir = _resolve_run_dir(args, efo_id=args.efo_id)
+    evidence = stage1_evidence.read(run_dir)
+    df, weights = stage2_score.score_targets(evidence, weights_file=args.weights)
+    csv_path, meta_path = stage2_score.write(df, weights, evidence, run_dir)
+
+    passing = df[df["passes_accessibility"]]
+    print(f"scored {len(df)} targets; {len(passing)} pass the accessibility gate")
+    print(f"\n{'#':>3} {'symbol':<10} {'score':>7}  {'ectodomain':>10}  class")
+    for _, row in passing.head(args.top).iterrows():
+        cls = (row["target_class"] or "").split(";")[0][:28]
+        print(f"{int(row['rank']):>3} {row['symbol']:<10} {row['composite_score']:>7.3f}  "
+              f"{int(row['ectodomain_residues'] or 0):>7} aa  {cls}")
+    print(f"\nwritten: {csv_path}\n         {meta_path}")
+    return 0
+
+
 def cmd_schema_check(args) -> int:
     """Verify the Open Targets field names this package queries still exist."""
     from .sources import opentargets as ot
@@ -100,6 +144,24 @@ def build_parser() -> argparse.ArgumentParser:
     s0.add_argument("--n-candidates", type=int, default=10, help="ontology hits to consider")
     _add_common(s0)
     s0.set_defaults(func=cmd_stage0)
+
+    s1 = sub.add_parser("stage1", help="gather evidence layers for the candidate targets")
+    s1.add_argument("--efo-id", default=None, help="disease id (locates the run directory)")
+    s1.add_argument("--n-targets", type=int, default=100, help="size of the candidate pool")
+    s1.add_argument(
+        "--all-layers",
+        action="store_true",
+        help="fetch per-target layers for unreachable targets too (slower)",
+    )
+    _add_common(s1)
+    s1.set_defaults(func=cmd_stage1)
+
+    s2 = sub.add_parser("stage2", help="score and rank the candidate targets")
+    s2.add_argument("--efo-id", default=None, help="disease id (locates the run directory)")
+    s2.add_argument("--weights", default=None, help="JSON file overriding scoring weights")
+    s2.add_argument("--top", type=int, default=15, help="rows to print")
+    _add_common(s2)
+    s2.set_defaults(func=cmd_stage2)
 
     sc = sub.add_parser("schema-check", help="verify upstream GraphQL field names")
     _add_common(sc)

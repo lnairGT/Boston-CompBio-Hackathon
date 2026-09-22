@@ -21,7 +21,6 @@ RCSB_FILES = "https://files.rcsb.org/download"
 UNIPROT_SEARCH = "https://rest.uniprot.org/uniprotkb/search"
 CHEMBL_BASE = "https://www.ebi.ac.uk/chembl/api/data"
 CLINICALTRIALS_V2 = "https://clinicaltrials.gov/api/v2/studies"
-OPENALEX_WORKS = "https://api.openalex.org/works"
 
 # A plain descriptive agent string. Do not impersonate a browser.
 USER_AGENT = "indication2binder/0.1 (python-requests)"
@@ -123,15 +122,58 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "antibody_tractability": 0.10,
 }
 
-# Multiplicative penalties, applied after the weighted sum.
-DEFAULT_PENALTIES: dict[str, float] = {
-    "safety_liability": 0.85,   # per Open Targets safety liability entry
-    "safety_floor": 0.60,       # penalty cannot push below this multiplier
-    "broad_expression": 0.90,   # low tissue specificity
+# Antibody-tractability buckets graded by how much they actually evidence
+# that a *biologic* can engage the target. The clinical buckets are real
+# precedent; the location buckets only restate that the protein is on the
+# surface, which the topology filter already establishes, so they score low.
+AB_BUCKET_SCORES: dict[str, float] = {
+    "Approved Drug": 1.00,
+    "Advanced Clinical": 0.85,
+    "Phase 1 Clinical": 0.70,
+    "UniProt loc high conf": 0.35,
+    "GO CC high conf": 0.35,
+    "UniProt SigP or TMHMM": 0.30,
+    "Human Protein Atlas loc": 0.25,
+    "UniProt loc med conf": 0.20,
+    "GO CC med conf": 0.20,
 }
 
-# Subcellular locations implying a de novo protein binder can physically
-# reach the target from outside the cell.
+# Saturation points for count-like evidence: the count at which the
+# normalised score reaches ~1.0. Counts are compressed logarithmically
+# because the difference between 1 and 10 trials matters far more than the
+# difference between 500 and 1000.
+SATURATION = {
+    "known_drugs": 40,
+    "trials": 300,
+    "chembl_mechanisms": 6,
+}
+
+# Multiplicative penalties, applied after the weighted sum.
+#
+# The safety penalty is deliberately FLAT rather than scaled by the number of
+# recorded liabilities. In this dataset the liability count correlates ~0.65
+# with the known-drug count: Open Targets accumulates liability annotations
+# for targets that have been taken into patients, so a count-scaled penalty
+# measures how well studied a target is, not how dangerous it is. Scaling it
+# dropped EGFR - the top-associated NSCLC target, with 82 drugs and 1,735
+# trials - twenty places. Severity is not available from this field, so the
+# honest treatment is a mild flag plus the count reported in the table for
+# the reader to judge.
+DEFAULT_PENALTIES: dict[str, float] = {
+    "safety_liability_any": 0.92,  # applied once if any liability is recorded
+    "broad_expression": 0.90,      # low tissue specificity
+}
+
+# Minimum length (residues) of an annotated extracellular topological domain
+# for a target to count as reachable by a protein binder. Guards against
+# single-pass proteins whose "extracellular" annotation is a few residues of
+# linker rather than a foldable, targetable domain.
+MIN_ECTODOMAIN_SPAN = 30
+
+# Location keywords used only as a secondary, recorded hint. Accessibility is
+# decided from UniProt topology (see sources/uniprot.py) because a location
+# string cannot distinguish which side of the membrane a protein sits on:
+# KRAS is annotated "Cell membrane" yet faces the cytoplasm.
 SURFACE_TERMS = (
     "cell membrane",
     "plasma membrane",
