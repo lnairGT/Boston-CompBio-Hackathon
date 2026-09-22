@@ -53,18 +53,53 @@ Two of these deserve emphasis. Both of us independently rejected keyword matchin
 location, and both of us independently excluded antibody complexes from epitope derivation. Those
 are the two errors most likely to silently produce a binder aimed at the wrong place.
 
-## The two antibody filters are complementary — combine them
+## Correction: `ind2b`'s partner filter is better than mine, not complementary to it
 
-This is the clearest immediate improvement, and neither approach is sufficient alone.
+I first wrote that our two antibody filters were complementary and should be combined. Reading
+`stage3_complexes.py` properly, that is wrong and worth correcting rather than quietly dropping.
 
-- **`ind2b`** matches the *entity description* against an immunoglobulin regex (`fab`, `scfv`,
-  `vhh`, `darpin`, …) plus a chaperone regex. Catches an antibody chain that **has** a UniProt
-  accession. Misses a novel binder scaffold whose description uses none of those words.
-- **agent spine** flags any partner chain with **no UniProt mapping**, plus chains that are
-  another copy of the target. Catches unnamed and engineered binders. Misses a UniProt-mapped
-  antibody, and false-positives on any legitimately unmapped partner.
+- **Mine is a denylist.** A partner chain is rejected when it has no UniProt mapping, or is
+  another copy of the target. Everything else is admitted, so it depends on me having
+  enumerated the ways a chain can be wrong.
+- **`ind2b`'s is an allowlist.** A chain becomes a `native_partner` only if its accession
+  appears in that target's **Open Targets interaction-partner list**. An antibody, a nanobody,
+  a DARPin, a crystallisation chaperone and an unnamed engineered binder all fail that test by
+  construction, without anyone having to think of them in advance. The immunoglobulin and
+  chaperone regexes are only used to *label* the rejected chains for the audit trail.
 
-Running both, and requiring a partner to pass each, is strictly stronger than either.
+An allowlist keyed to known interactors is the stronger design and mine adds nothing to it.
+`ind2b` also has an insight I did not: **one epitope per partner chain, not per entry**, because
+a target contacting two partners at once yields a composite interface of several thousand square
+ångström that no single mini-binder reproduces. That is a real constraint on what is designable
+and my per-entry contact set quietly ignored it.
+
+## One real gap, verified on live data
+
+`stage4_interface.analyse_target` picks the target chain with:
+
+```python
+target_chain = target_chains[0]
+```
+
+When an entry contains several copies of the target this silently takes the first. Two entries
+in our own candidate set do:
+
+```
+8K4Q  P24394 -> chains A, C   offsets {A: +25, C: +25}   agree -> picks A silently
+3L5W  P35225 -> chains I, J   offsets {I: +33, J: +33}   agree -> picks I silently
+1IAR  P24394 -> chain  B      offsets {B: +25}           single chain, no ambiguity
+```
+
+**To be accurate about severity: in both multi-chain cases the offsets agree, so `ind2b`'s
+current output is correct and I have not found an entry where it is wrong.** The gap is that
+nothing would tell you if they disagreed — and where copies differ in their SIFTS alignment the
+wrong pick shifts every reported residue position, which is a numbering error rather than a
+cosmetic ambiguity. It is a latent hazard, not an observed failure.
+
+Suggested minimal change, in the spirit of the existing code: when `len(target_chains) > 1`,
+build the numbering map for each, and either record `alternative_chains` with their offsets on
+the epitope row, or reject with `ambiguous_target_chain` when the offsets disagree. A caller
+should not be able to miss it.
 
 ## Disposition of every piece of agent work
 
@@ -92,10 +127,9 @@ Running both, and requiring a partner to pass each, is strictly stronger than ei
 
 **Contribute as fixes to `ind2b`:**
 
-1. **Unmapped-chain partner check** added alongside the antibody regex (above).
-2. **Chain multiplicity signalling.** 8K4Q maps `P24394` to chains A *and* C. Returning one
-   chain without flagging the other lets a caller design against an arbitrary copy.
-3. **Bind approval to parameters.** If a stage-6 gate is added, the approval must carry a hash
+1. **Chain multiplicity in `stage4_interface`** — the `target_chains[0]` gap above. This is the
+   one code-level fix I am confident `ind2b` needs, and it is verified on a real entry.
+2. **Bind approval to parameters.** If a stage-6 gate is added, the approval must carry a hash
    of the exact parameters and refuse when they change — approving a 4-design run and then
    setting it to 512 must not launch. Nested in-place mutation is the case that evades a naive
    check, because pydantic's `validate_assignment` does not fire on it.
