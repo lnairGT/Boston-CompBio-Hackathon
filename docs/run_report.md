@@ -24,8 +24,7 @@ the Raw link. See `docs/examples/README.md` for how it was generated.
 
 | Section | Shows |
 |---|---|
-| Overview | the funnel as a gate sequence: candidates -> reachable -> has complex -> epitopes -> specs |
-| Design status | whether anything was actually designed, and what the run does not establish |
+| Overview | the funnel as a gate sequence: candidates -> reachable -> has complex -> epitopes -> specs, plus the design-state headline read from the run's own design record |
 | Indication | resolved ontology id, the rule that chose it, and the candidates rejected |
 | Targets | every pooled target including excluded ones, expanding to score-component bars and evidence |
 | Rubric | weights, penalties, count saturation, and the caveats recorded with the ranking |

@@ -515,6 +515,38 @@ def pill(text: str, kind: str = "") -> str:
 # sections
 # --------------------------------------------------------------------------
 
+def _designed_stat(run: dict) -> tuple[str, str, str]:
+    """The 'binders designed' headline, read from the run rather than assumed.
+
+    This is the only place the report states design state, so it must not be
+    hardcoded: a run that later gains a design record has to be reported
+    honestly, and a design job that ran without succeeding yields no candidates.
+    """
+    dr = run.get("design_run") or {}
+    cands = run.get("candidates")
+    n_cand: int | None = None
+    if isinstance(cands, pd.DataFrame):
+        n_cand = len(cands)
+    elif isinstance(cands, list):
+        n_cand = len(cands)
+
+    state = dr.get("status") or dr.get("state")
+    if not dr and n_cand is None:
+        return ("binders designed", "0",
+                "specifications only; no design run in this directory")
+    if state and state != "succeeded":
+        return ("binders designed", "0",
+                f"design run {state} - a run that has not succeeded yields no "
+                f"candidates, and none are inferred from a partial run")
+    if n_cand is None:
+        return ("binders designed", "&mdash;",
+                f"design run {state or 'present'} but no candidate record found, "
+                f"so the count is unknown rather than zero")
+    return ("binder candidates", f"{n_cand:,}",
+            "a succeeded design job is not the same as a candidate passing "
+            "evaluation")
+
+
 def sec_overview(run: dict) -> str:
     d0 = run.get("disease") or {}
     ev = run.get("evidence") or {}
@@ -552,8 +584,7 @@ def sec_overview(run: dict) -> str:
         ("indication", esc(disease.get("name")), esc(disease.get("id"))),
         ("resolution rule", esc(d0.get("selection_rule")),
          "ambiguous" if d0.get("ambiguous") else "unambiguous"),
-        ("binders designed", "0",
-         "specifications only; no design run in this directory"),
+        _designed_stat(run),
     ]
     if isinstance(epi, pd.DataFrame) and n_epi_ok:
         ok = epi[epi["status"] == "accepted"]
@@ -1227,40 +1258,6 @@ def sec_binders(run: dict) -> str:
                     f'targets have a designed binder in the PDB')
 
 
-def sec_design_status(run: dict) -> str:
-    """State plainly whether anything was actually designed."""
-    dr = run.get("design_run")
-    cands = run.get("candidates")
-    sm = run.get("specs_manifest") or {}
-    if not dr and cands is None:
-        body = (
-            '<p class="verdict bad"><strong>Not end-to-end complete.</strong> '
-            'This run stops at specifications. No design job was executed, no binder '
-            'sequence exists, and no candidate has been evaluated.</p>'
-            '<p class="note">Writing a specification is not designing a binder. '
-            + (esc(sm.get("not_submitted", "")) if sm.get("not_submitted") else "")
-            + ' Running a campaign needs a GPU host; the decision belongs to whoever '
-              'reads the epitope shortlist.</p>'
-            '<p class="note">What this run does <strong>not</strong> establish: '
-            'that a ranked target is causal in the disease; that blocking the named '
-            'partner is therapeutic (partner relevance is inherited from an '
-            'interaction database, not curated per indication); or that any binder '
-            'can be made against these epitopes with useful affinity, specificity '
-            'or developability.</p>'
-        )
-        return card("Design status", body)
-    state = (dr or {}).get("status") or (dr or {}).get("state")
-    kind = "ok" if state == "succeeded" else "warn"
-    body = f'<p class="verdict {kind}">Design run status: {pill(str(state), kind)}</p>'
-    if state != "succeeded":
-        body += ('<p class="note">A design run that has not succeeded does not yield '
-                 'candidates; nothing is inferred from a partial run.</p>')
-    else:
-        body += ('<p class="note">A succeeded compute job is not the same as a candidate '
-                 'passing evaluation.</p>')
-    return card("Design status", body)
-
-
 def sec_methods(run: dict) -> str:
     meta = run.get("interface_meta") or {}
     params = meta.get("interface_params") or {}
@@ -1533,7 +1530,6 @@ def build(run_dir: str | Path, out_path: str | Path, title: str | None = None) -
 
     sections = [
         ("overview", "Overview", sec_overview(run)),
-        ("status", "Design status", sec_design_status(run)),
         ("disease", "Indication", sec_disease(run)),
         ("targets", "Targets", sec_targets(run)),
         ("rubric", "Rubric", sec_rubric(run)),
