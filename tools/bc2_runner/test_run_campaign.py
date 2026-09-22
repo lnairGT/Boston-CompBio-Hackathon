@@ -148,6 +148,106 @@ def test_command_asserts_gpu_before_spending_the_budget(tmp_path):
     assert "BINDCRAFT_AF2_PARAMS" in cmd
 
 
+def _write_campaign_output(root: Path, name: str = "il4r_1iar_b") -> Path:
+    """A minimal BindCraft2 project_folder, in the layout stage 6 documents."""
+    p = root / name
+    for sub in ("3_Ranked", "2_Refolded", "1_Trajectories"):
+        (p / sub).mkdir(parents=True)
+    (p / "campaign_metadata.json").write_text(json.dumps({
+        "campaign_name": name, "modality": "binder",
+        "targets": [{"name": "IL4R_1IAR_B", "chains": "B",
+                     "hotspots": "127,67,69,126,68,13"}],
+        "number_of_final_designs": 4,
+    }))
+    (p / "3_Ranked" / "!_Ranked.csv").write_text(
+        "design,rank,binder_sequence,autotuned\nil4r_l55_s1,1,AEELKKLLEEA,\n")
+    (p / "2_Refolded" / "!_Refolded.csv").write_text(
+        "design,accepted,failed_filters\nil4r_l55_s1,True,\nil4r_l55_s2,False,shape_complementarity\n")
+    (p / "1_Trajectories" / "!_Trajectories.csv").write_text(
+        "design,terminated\nil4r_l55_s1,\nil4r_l55_s2,clash\n")
+    (p / "summary.csv").write_text("metric,value\nn_accepted,1\n")
+    return p
+
+
+def test_project_folder_is_under_out_so_the_harness_keeps_it(tmp_path):
+    """A harness constraint that cost a real 28-minute campaign.
+
+    Output is collected from ``./out/`` only. BindCraft2 writes wherever
+    ``project_folder`` points, so if that is not under ``out/`` the files are written,
+    the job exits, and they are discarded with the per-job working directory -- exit
+    code and logs all look normal. Keep the default pointing into ``out/``.
+    """
+    spec = make_spec(tmp_path)
+    staged = stage_campaign(spec, "IL4R_1IAR_B", tmp_path / "job", remote_root="/work")
+    assert staged["project_folder"].startswith("/work/out/")
+
+
+def test_stage6_can_read_a_campaign_folder(tmp_path):
+    """The integration claim, tested against ind2b's real reader rather than asserted.
+
+    Skips where stage 6 is not importable -- it arrives in a separate PR.
+    """
+    stage6 = pytest.importorskip("ind2b.stage6_designs",
+                                 reason="stage 6 not present in this checkout")
+    folder = _write_campaign_output(tmp_path / "out")
+
+    found = stage6.discover_campaigns([tmp_path / "out"])
+    assert [f.name for f in found] == ["il4r_1iar_b"], "campaign discovered by its records"
+
+    rec = stage6.read_campaign(found[0],
+                               requested_hotspots=["127", "67", "69", "126", "68", "13"])
+    assert rec["campaign_name"] == "il4r_1iar_b"
+    assert rec["n_accepted"] == 1
+    assert rec["n_attempts"] == 2
+    assert rec["n_candidates_scored"] == 2
+    assert len(rec["designs"]) == 1
+
+
+def test_stage6_distinguishes_not_measured_from_measured_zero(tmp_path):
+    """A blank is not a zero, and stage 6 enforces that -- this test initially asserted
+    the opposite and was wrong.
+
+    A time-bounded campaign is the common case for this runner, so the distinction is
+    load-bearing:
+
+      * **no ranked table at all** -> ``n_accepted is None``. The campaign never reached
+        the ranking stage. Reporting 0 here would manufacture a measurement, and a reader
+        could take it as "nothing passed the filters" when nothing was ever filtered.
+      * **an empty ranked table** -> ``n_accepted == 0``. The stage ran and accepted
+        nothing, which is a real result.
+
+    Both campaigns are still discovered, so neither disappears from the report.
+    """
+    stage6 = pytest.importorskip("ind2b.stage6_designs",
+                                 reason="stage 6 not present in this checkout")
+
+    never_ranked = tmp_path / "out" / "never_ranked"
+    (never_ranked / "1_Trajectories").mkdir(parents=True)
+    (never_ranked / "campaign_metadata.json").write_text(
+        json.dumps({"campaign_name": "never_ranked"}))
+    (never_ranked / "1_Trajectories" / "!_Trajectories.csv").write_text(
+        "design,terminated\nd1,clash\n")
+
+    ranked_empty = tmp_path / "out" / "ranked_empty"
+    (ranked_empty / "3_Ranked").mkdir(parents=True)
+    (ranked_empty / "1_Trajectories").mkdir(parents=True)
+    (ranked_empty / "campaign_metadata.json").write_text(
+        json.dumps({"campaign_name": "ranked_empty"}))
+    (ranked_empty / "3_Ranked" / "!_Ranked.csv").write_text("design,rank,binder_sequence\n")
+    (ranked_empty / "1_Trajectories" / "!_Trajectories.csv").write_text(
+        "design,terminated\nd1,clash\n")
+
+    found = {f.name for f in stage6.discover_campaigns([tmp_path / "out"])}
+    assert found == {"never_ranked", "ranked_empty"}, "both must still be discovered"
+
+    a = stage6.read_campaign(tmp_path / "out" / "never_ranked")
+    assert a["n_accepted"] is None, "no ranked table means not measured, not zero"
+    assert a["n_attempts"] == 1
+
+    b = stage6.read_campaign(tmp_path / "out" / "ranked_empty")
+    assert b["n_accepted"] == 0, "an empty ranked table is a measured zero"
+
+
 def test_command_points_at_the_staged_parameters(tmp_path):
     """Without the override BC2 lazily downloads 5.3 GB on first campaign, which on an
     account with no job-time egress hangs rather than failing fast."""
