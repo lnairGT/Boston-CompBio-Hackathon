@@ -480,6 +480,11 @@ def run(
             "symbol": e["symbol"],
             "entry_id": e["entry_id"],
             "target_chain": e.get("target_chain"),
+            # Without the partner chain, epitopes from one entry that differ
+            # only by which partner they engage collapse into each other.
+            "partner_chain": e.get("partner_chain"),
+            "partner_symbol": e.get("partner_symbol"),
+            "epitope_status": e.get("status"),
             **{k: r.get(k) for k in (
                 "auth_seq_id", "uniprot_pos", "residue", "delta_sasa",
                 "min_distance", "is_contact", "is_buried", "in_ectodomain",
