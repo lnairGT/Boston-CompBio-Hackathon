@@ -21,6 +21,9 @@ RCSB_FILES = "https://files.rcsb.org/download"
 UNIPROT_SEARCH = "https://rest.uniprot.org/uniprotkb/search"
 CHEMBL_BASE = "https://www.ebi.ac.uk/chembl/api/data"
 CLINICALTRIALS_V2 = "https://clinicaltrials.gov/api/v2/studies"
+# CELLxGENE Discover. Note this is NOT the Census: Discover is the dataset index and
+# carries terms the Census release lags by roughly six months. See sources/cellxgene.py.
+CELLXGENE_CURATION = "https://api.cellxgene.cziscience.com/curation/v1"
 
 # A plain descriptive agent string. Do not impersonate a browser.
 USER_AGENT = "indication2binder/0.1 (python-requests)"
