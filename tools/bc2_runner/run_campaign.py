@@ -165,10 +165,16 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=3600,
                     help="wall-clock bound in seconds; a BC2 campaign has no natural end")
     ap.add_argument("--workdir", type=Path, default=Path("bc2_job"))
+    ap.add_argument("--remote-root", default="/work",
+                    help="absolute directory the job unpacks into. target_path and "
+                         "project_folder are written under it, so it must match where the "
+                         "files actually land -- a mismatch surfaces as a missing structure "
+                         "several seconds into a paid GPU job.")
     ap.add_argument("--dry-run", action="store_true", help="stage and print; submit nothing")
     args = ap.parse_args()
 
-    staged = stage_campaign(args.spec_dir, args.campaign, args.workdir)
+    staged = stage_campaign(args.spec_dir, args.campaign, args.workdir,
+                            remote_root=args.remote_root)
     cmd = build_command(staged)
     print(json.dumps({"staged": staged, "command": cmd, "image": IMAGE_ID,
                       "volumes": {AF2_MOUNT: AF2_VOLUME}, "timeout_s": args.timeout}, indent=2))

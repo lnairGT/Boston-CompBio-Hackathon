@@ -65,6 +65,37 @@ nothing in the output saying why.
 downloads 5.3 GB on first campaign. On an account with no egress at job time that hangs
 rather than failing fast.
 
+## Harvesting: the failure that cost two campaigns
+
+Read this before running anything expensive. Two separate campaigns completed, wrote their
+output, and had it **silently discarded** — 76 files and 23 files. Nothing in the exit code, the
+logs or the campaign's own output indicated a problem.
+
+Two rules, and the second is the one that is easy to get wrong:
+
+**1. `project_folder` must sit under `./out/`.** That is the only directory collected from a
+job. The runner's default already does this; do not point `project_folder` elsewhere.
+
+**2. Do not name an output filter unless you are certain of what it is relative to.** On this
+harness the filter is interpreted **relative to the `./out/` root**, so asking for `out/` means
+`./out/out/` and matches nothing — every real file is dropped. Omitting the filter returns
+everything under `./out/`, which is what you want.
+
+```python
+# WRONG — silently keeps nothing, job still exits normally
+submit_job(..., outputs=["out/"])
+
+# RIGHT — everything under ./out/ comes back
+submit_job(...)
+```
+
+The loss surfaces only as a note on the completion record along the lines of
+*"N unselected file(s) under ./out/ were not kept"*. If you see that, the files are already gone:
+the working directory does not persist between jobs, so a follow-up job cannot retrieve them.
+
+Related: a campaign stopped by its wall-clock bound exits **124** with results already on disk.
+A non-zero exit here does not mean "no output".
+
 ## What it does not promise
 
 A finished campaign. BindCraft2 runs until it reaches the requested number of accepted
