@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -40,7 +41,12 @@ def _tokens(text: str) -> set[str]:
     return set(_TOKEN_RE.findall((text or "").lower()))
 
 
-def select_disease(query: str, hits: list[dict]) -> tuple[dict, str, bool]:
+def select_disease(
+    query: str,
+    hits: list[dict],
+    *,
+    synonyms_of: Callable[[list[str]], dict[str, dict[str, list[str]]]] | None = None,
+) -> tuple[dict, str, bool]:
     """Choose one ontology hit for ``query``.
 
     Returns ``(hit, rule, ambiguous)``. The rule is recorded in the stage
@@ -48,8 +54,24 @@ def select_disease(query: str, hits: list[dict]) -> tuple[dict, str, bool]:
     true when the choice rested on search rank alone - the case where a human
     should confirm or pass an explicit id.
 
-    Precedence: exact name match, then a hit whose name contains every query
-    token, then top search rank.
+    Precedence: exact name match, then exact *synonym* match, then a hit whose
+    name contains every query token, then top search rank.
+
+    The synonym step exists because a disease's everyday name is often a MONDO
+    synonym rather than its preferred label, and token matching on labels alone
+    then picks the wrong term. "atopic dermatitis" is the case that motivated
+    it: MONDO's label for that disease is "atopic eczema", which shares no
+    token with "dermatitis", while the rare Mendelian term "immunodeficiency
+    11b with atopic dermatitis" contains the query verbatim - so token matching
+    silently selected a different disease. "atopic dermatitis" is a
+    ``hasExactSynonym`` of the intended term, which settles it on ontology
+    evidence rather than on string overlap.
+
+    Only ``hasExactSynonym`` is treated as identity. Broad and narrow synonyms
+    name a more general or more specific disease and must not collapse into it.
+
+    ``synonyms_of`` is injected so this function stays pure and offline-testable;
+    when omitted the synonym step is skipped and the previous precedence holds.
     """
     if not hits:
         raise ValueError(f"no disease hits for query {query!r}")
@@ -58,6 +80,18 @@ def select_disease(query: str, hits: list[dict]) -> tuple[dict, str, bool]:
     for hit in hits:
         if (hit.get("name") or "").strip().lower() == q_norm:
             return hit, "exact_name_match", False
+
+    if synonyms_of is not None and q_norm:
+        ids = [h["id"] for h in hits if h.get("id")]
+        try:
+            syn = synonyms_of(ids)
+        except Exception:  # a synonym lookup failure must not break resolution
+            log.warning("synonym lookup failed; falling back to name matching", exc_info=True)
+            syn = {}
+        for hit in hits:
+            exact = syn.get(hit.get("id"), {}).get("hasExactSynonym") or []
+            if q_norm in {t.strip().lower() for t in exact}:
+                return hit, "exact_synonym_match", False
 
     q_tokens = _tokens(query)
     if q_tokens:
@@ -87,7 +121,9 @@ def resolve(
         if not indication:
             raise ValueError("provide either an indication string or an efo_id")
         candidates = ot.search_disease(indication, size=n_candidates)
-        hit, rule, ambiguous = select_disease(indication, candidates)
+        hit, rule, ambiguous = select_disease(
+            indication, candidates, synonyms_of=ot.diseases_synonyms
+        )
         chosen_id = hit["id"]
 
     info = ot.disease_info(chosen_id)  # raises if the id is unknown

@@ -59,6 +59,38 @@ def search_disease(query_string: str, size: int = 10) -> list[dict]:
     return data["search"]["hits"]
 
 
+def diseases_synonyms(efo_ids: list[str]) -> dict[str, dict[str, list[str]]]:
+    """Fetch ontology synonyms for several disease ids in one request.
+
+    Returns ``{efo_id: {relation: [terms]}}``. The relation is kept rather than
+    flattened because the relations do not mean the same thing:
+    ``hasExactSynonym`` asserts the terms name the *same* disease, while
+    ``hasBroadSynonym`` and ``hasNarrowSynonym`` name a more general or more
+    specific one. Only the exact relation can be treated as identity.
+
+    Batched deliberately: term selection compares a query against every
+    candidate hit, and one request for all of them keeps that to a single
+    cached call instead of one per candidate.
+    """
+    if not efo_ids:
+        return {}
+    q = """
+    query($ids:[String!]!){
+      diseases(efoIds:$ids){ id name synonyms { relation terms } }
+    }
+    """
+    data = graphql(q, {"ids": list(efo_ids)})
+    out: dict[str, dict[str, list[str]]] = {}
+    for dis in data.get("diseases") or []:
+        rel: dict[str, list[str]] = {}
+        for block in dis.get("synonyms") or []:
+            relation = block.get("relation")
+            if relation:
+                rel[relation] = list(block.get("terms") or [])
+        out[dis["id"]] = rel
+    return out
+
+
 def disease_info(efo_id: str) -> dict:
     """Disease record with the descendant subtree used to widen the pull."""
     q = """
