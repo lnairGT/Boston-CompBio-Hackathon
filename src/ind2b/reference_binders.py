@@ -477,6 +477,15 @@ def add_projections(
             b["projection"] = proj
             n += 1
     record["n_projections"] = n
+
+    # Trim the complexes that were projected, so a report can embed a real
+    # structure for them. Only the projected ones: a viewer for a complex the
+    # report does not show would be dead weight.
+    from .structure_export import export_for_viewer
+
+    projected = [(t["symbol"], b) for t in record["targets"] for b in t["binders"]
+                 if b.get("projection")]
+    record["n_viewer_structures"] = export_for_viewer(projected, run_dir)
     return record
 
 

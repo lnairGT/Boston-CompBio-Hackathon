@@ -137,10 +137,46 @@ designed scaffolds, whose footprints are far larger than a campaign produces.
 
 ## 3-D viewers
 
-Structure figures are rotatable: drag to rotate, scroll to zoom, double-click to
-reset. The geometry is a persisted principal-axis frame of the complex's CA
-coordinates, drawn on a canvas by the report's own code - there is no viewer
-library to fetch, so the file stays self-contained and works offline. The cost is
-that this is a backbone trace, not cartoon ribbons or a molecular surface; for
-publication-quality rendering open the deposited entry in PyMOL, ChimeraX or
-Mol*. Printing falls back to a flat SVG of the same geometry.
+Structure figures are rotatable, and there are two renderers. Both are
+self-contained: nothing is fetched at view time.
+
+| `--viewer` | What you get | Example report size |
+| --- | --- | --- |
+| `auto` (default) | cartoon rendering via 3Dmol.js where a trimmed structure exists, backbone trace otherwise | ~4.6 MB |
+| `rich` | as `auto`, but fails loudly if the vendored library is missing | ~4.6 MB |
+| `light` | backbone trace only, no library inlined | ~1.8 MB |
+
+```bash
+python scripts/ind2b_interactive.py --run-dir runs/MONDO_0005233 --viewer light
+```
+
+**Cartoon rendering** uses 3Dmol.js, vendored at `scripts/vendor/3Dmol-min.js`
+(0.54 MB, BSD-3-Clause; `VERSION.json` records the version, source URL and
+SHA-256). It is vendored rather than loaded from a CDN so a report renders
+reproducibly and views offline. The library is inlined only when a rich viewer
+was actually emitted, so a run with nothing to show in 3-D does not carry half a
+megabyte for nothing. Target chain is grey, binder purple, epitope blue, hotspots
+red with spheres on their Cα.
+
+**The backbone trace** is the fallback and needs no library: a canvas drawing of a
+persisted principal-axis frame of the complex's CA coordinates. It is what you see
+when the library is absent, when `--viewer light` is used, **or when the browser
+provides no WebGL** - in that last case the report says so in place of the cartoon
+view rather than showing an empty box. Printing falls back to a flat SVG of the
+same geometry.
+
+Neither is a publication figure: a WebGL render is not deterministic across GPUs
+and browsers. For figures, open the deposited entry in PyMOL, ChimeraX or Mol*.
+
+### Structures for the viewer
+
+`ind2b reference-binders` trims each projected complex to the target chain plus
+the one binder chain whose interface was measured, writing
+`viewer_structures/<SYMBOL>_<ENTRY>_<CHAIN>.pdb`. Only that pair: a deposited
+entry often holds several copies of the binder, and showing the non-contacting
+ones would imply contacts that are not there.
+
+Output is PDB because in-browser viewers parse it most consistently, which is
+safe only for small complexes - legacy PDB caps atom serials at 99,999 and chain
+ids at one character. `structure_export` refuses to write a file that would
+overflow either, rather than emitting one a viewer would misread.

@@ -384,7 +384,65 @@ def svg_structure(projection: dict, width: int = 820, height: int = 380) -> str:
     return "".join(parts)
 
 
-def viewer3d(projection: dict, vid: str, height: int = 400) -> str:
+VENDOR_3DMOL = Path(__file__).resolve().parent / "vendor" / "3Dmol-min.js"
+
+
+def load_vendor_3dmol() -> str | None:
+    """The vendored 3Dmol.js source, or None if it is not present.
+
+    Vendored rather than fetched so a report renders offline and reproducibly.
+    Absence is handled by falling back to the built-in canvas viewer; it is
+    never fetched at render time and never at view time.
+    """
+    try:
+        return VENDOR_3DMOL.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def viewer_rich(
+    structure_text: str,
+    *,
+    vid: str,
+    target_chain: str,
+    binder_chains: Sequence[str],
+    epitope_auth: Sequence[str] = (),
+    hotspot_auth: Sequence[str] = (),
+    height: int = 420,
+) -> str:
+    """A cartoon-rendered, rotatable 3Dmol.js view of one complex.
+
+    Emits the structure inline and a small spec describing how to colour it.
+    Rendering is done by the vendored library at view time; if WebGL is
+    unavailable the surrounding markup reveals the canvas backbone viewer
+    instead, so the figure degrades rather than disappearing.
+    """
+    spec = {
+        "target_chain": target_chain,
+        "binder_chains": list(binder_chains),
+        "epitope": [str(r) for r in epitope_auth],
+        "hotspots": [str(r) for r in hotspot_auth],
+    }
+    return (
+        f'<div class="v3d-rich" id="{vid}-rich" data-spec="{vid}-spec" '
+        f'data-struct="{vid}-pdb" style="height:{height}px"></div>'
+        f'<script type="application/json" id="{vid}-spec">'
+        f'{json.dumps(spec, separators=(",", ":"))}</script>'
+        f'<script type="text/plain" id="{vid}-pdb">{esc(structure_text)}</script>'
+    )
+
+
+def viewer3d(
+    projection: dict,
+    vid: str,
+    height: int = 400,
+    *,
+    rich_structure: str | None = None,
+    rich_target_chain: str | None = None,
+    rich_binder_chains: Sequence[str] | None = None,
+    rich_epitope: Sequence[str] | None = None,
+    rich_hotspots: Sequence[str] | None = None,
+) -> str:
     """A rotatable 3-D backbone view, plus the flat SVG as the print fallback.
 
     The geometry is the persisted principal-axis frame from stage 6, embedded
@@ -414,8 +472,17 @@ def viewer3d(projection: dict, vid: str, height: int = 400) -> str:
         ],
     }
     data = json.dumps(payload, separators=(",", ":"))
+    rich = ""
+    if rich_structure:
+        rich = viewer_rich(
+            rich_structure, vid=vid, target_chain=rich_target_chain or "",
+            binder_chains=rich_binder_chains or [],
+            epitope_auth=rich_epitope or [], hotspot_auth=rich_hotspots or [],
+            height=height)
     return (
-        f'<div class="viewer3d" data-payload="{vid}-data" style="height:{height}px">'
+        rich
+        + f'<div class="viewer3d{" has-rich" if rich else ""}" '
+        f'data-payload="{vid}-data" style="height:{height}px">'
         f'<canvas id="{vid}" height="{height}"></canvas>'
         f'<div class="v3d-hint">drag to rotate &middot; scroll to zoom &middot; '
         f'double-click to reset</div>'
@@ -1094,6 +1161,40 @@ def sec_specs(run: dict) -> str:
                 note=note, sub=f'{sm.get("n_specs")} written')
 
 
+def _rich_kwargs(run: dict, binder: dict) -> dict:
+    """Structure text and highlight lists for the cartoon viewer, if available."""
+    if run.get("_viewer_mode") == "light" or not run.get("_vendor_available"):
+        return {}
+    rel = binder.get("viewer_structure")
+    if not rel:
+        return {}
+    path = Path(run["_run_dir"]) / rel
+    try:
+        text = path.read_text()
+    except OSError:
+        return {}
+    proj = binder.get("projection") or {}
+    epi, hot = [], []
+    for chain in proj.get("chains") or []:
+        if chain.get("role") != "target":
+            continue
+        for rid, flag in zip(chain.get("residues") or [], chain.get("flags") or []):
+            if flag == "hotspot":
+                hot.append(rid)
+            elif flag == "epitope":
+                epi.append(rid)
+    fp = binder.get("footprint") or {}
+    run["_rich_emitted"] = (run.get("_rich_emitted") or 0) + 1
+    return {
+        "rich_structure": text,
+        "rich_target_chain": binder.get("target_chain"),
+        "rich_binder_chains": [fp.get("binder_chain_used")]
+        if fp.get("binder_chain_used") else [],
+        "rich_epitope": epi,
+        "rich_hotspots": hot,
+    }
+
+
 def sec_designs(run: dict) -> str:
     """Binders this pipeline's own BindCraft2 campaigns produced, if any."""
     rec = run.get("designs")
@@ -1323,7 +1424,10 @@ def sec_binders(run: dict) -> str:
             f'<div class="card-head"><h4 style="margin:0">{headline}</h4>'
             f'<span class="sub">{badge}</span></div>'
             + (f'<p class="note">{note}</p>' if note else "")
-            + viewer3d(b["projection"], f'v3d-{slug(t["symbol"])}-{slug(b["entry_id"])}')
+            + viewer3d(
+                b["projection"],
+                f'v3d-{slug(t["symbol"])}-{slug(b["entry_id"])}',
+                **_rich_kwargs(run, b))
             + f'<p class="caption">Backbone schematic of <code>{esc(b["entry_id"])}</code> '
               f'at {num(b.get("resolution"), 2)}&#8491;, projected onto the complex\'s two '
               f'principal axes. Lines trace C&alpha; positions only &mdash; this is not a '
@@ -1558,6 +1662,13 @@ tr.detail{display:none}
 tr.detail.open{display:table-row}
 tr.detail td{background:#fbfcfd;border-bottom:1px solid var(--border)}
 .detail-in{padding:6px 2px 10px}
+.v3d-rich{position:relative;width:100%;background:#fff;
+border:1px solid var(--border);border-radius:6px;margin:6px 0 4px;overflow:hidden}
+.v3d-rich canvas{border-radius:6px}
+.v3d-reset{position:absolute;top:8px;right:10px;z-index:5;padding:2px 9px;
+font-size:11.5px;border-radius:5px;border:1px solid var(--border);
+background:rgba(255,255,255,.9);color:var(--muted);cursor:pointer}
+.v3d-reset:hover{color:var(--text)}
 .viewer3d{position:relative;background:#fff;border:1px solid var(--border);
 border-radius:6px;margin:6px 0 4px;overflow:hidden}
 .viewer3d canvas{display:block;width:100%;cursor:grab;touch-action:none}
@@ -1605,7 +1716,7 @@ font-size:12.5px}
 @media (max-width:720px){.kv-row{grid-template-columns:1fr}
 .top-in,main{padding-left:14px;padding-right:14px}}
 @media print{header.top{position:static}nav{display:none}
-.viewer3d{display:none}.print-only{display:block}
+.viewer3d,.v3d-rich{display:none}.print-only{display:block}
 .card{break-inside:avoid;box-shadow:none}tr.detail{display:table-row}}
 """
 
@@ -1836,8 +1947,77 @@ function initViewer(box){
   draw();
 }
 
+function webglAvailable(){
+  try{
+    var c = document.createElement('canvas');
+    return !!(window.WebGLRenderingContext &&
+      (c.getContext('webgl') || c.getContext('experimental-webgl')));
+  }catch(e){ return false; }
+}
+function initRichViewers(){
+  var boxes = document.querySelectorAll('.v3d-rich');
+  // No library or no WebGL: leave the canvas backbone viewers visible. The
+  // figure degrades to a simpler drawing rather than disappearing.
+  var ok = (typeof window.$3Dmol !== 'undefined') && webglAvailable();
+  if(!ok){
+    for(var i=0;i<boxes.length;i++){
+      boxes[i].style.display = 'none';
+      var note = document.createElement('p');
+      note.className = 'note';
+      note.textContent = ok ? '' :
+        'Cartoon rendering needs WebGL, which this browser did not provide. ' +
+        'Showing the backbone trace instead.';
+      if(!ok && boxes[i].parentNode) boxes[i].parentNode.insertBefore(note, boxes[i]);
+    }
+    return;
+  }
+  for(var b=0;b<boxes.length;b++) initRich(boxes[b]);
+}
+function initRich(box){
+  var specNode = document.getElementById(box.getAttribute('data-spec'));
+  var pdbNode = document.getElementById(box.getAttribute('data-struct'));
+  if(!specNode || !pdbNode) return;
+  var spec, pdb;
+  try{ spec = JSON.parse(specNode.textContent); }catch(e){ return; }
+  pdb = pdbNode.textContent;
+  var viewer;
+  try{
+    viewer = $3Dmol.createViewer(box, {backgroundColor:'white', antialias:true});
+    viewer.addModel(pdb, 'pdb');
+  }catch(e){ box.style.display='none'; return; }
+
+  var T = spec.target_chain, B = spec.binder_chains || [];
+  viewer.setStyle({}, {cartoon:{color:'#c9d1d9', opacity:0.95}});
+  viewer.setStyle({chain:T}, {cartoon:{color:'#8c959f'}});
+  for(var i=0;i<B.length;i++){
+    viewer.setStyle({chain:B[i]}, {cartoon:{color:'#8250df'}});
+  }
+  if(spec.epitope && spec.epitope.length){
+    viewer.setStyle({chain:T, resi:spec.epitope},
+                    {cartoon:{color:'#0969da'},
+                     stick:{radius:0.12, color:'#0969da'}});
+  }
+  if(spec.hotspots && spec.hotspots.length){
+    viewer.setStyle({chain:T, resi:spec.hotspots},
+                    {cartoon:{color:'#cf222e'},
+                     stick:{radius:0.2, color:'#cf222e'}});
+    viewer.addStyle({chain:T, resi:spec.hotspots, atom:'CA'},
+                    {sphere:{radius:0.9, color:'#cf222e'}});
+  }
+  viewer.zoomTo();
+  viewer.render();
+  // Hide the canvas fallback only once the rich view has actually rendered.
+  var fallback = box.parentNode && box.parentNode.querySelector('.viewer3d.has-rich');
+  if(fallback) fallback.style.display = 'none';
+  var reset = document.createElement('button');
+  reset.className = 'v3d-reset'; reset.type = 'button'; reset.textContent = 'reset view';
+  reset.onclick = function(){ viewer.zoomTo(); viewer.render(); };
+  box.appendChild(reset);
+  window.addEventListener('resize', function(){ viewer.resize(); viewer.render(); });
+}
+
 window.addEventListener('DOMContentLoaded',function(){
-  tipInit(); navInit(); initViewers();
+  tipInit(); navInit(); initViewers(); initRichViewers();
   document.querySelectorAll('table.grid').forEach(function(t){
     filterTable(t.id,'');
     var s=t.getAttribute('data-sort');
@@ -1847,12 +2027,22 @@ window.addEventListener('DOMContentLoaded',function(){
 """
 
 
-def build(run_dir: str | Path, out_path: str | Path, title: str | None = None) -> dict:
+def build(run_dir: str | Path, out_path: str | Path, title: str | None = None,
+          viewer: str = "auto") -> dict:
     """Render ``run_dir`` to a single self-contained interactive HTML file."""
     run_dir = Path(run_dir)
     if not run_dir.is_dir():
         raise NotADirectoryError(f"{run_dir} is not a directory")
+    if viewer not in ("auto", "rich", "light"):
+        raise ValueError("viewer must be one of: auto, rich, light")
     run = load_run(run_dir)
+    vendor = None if viewer == "light" else load_vendor_3dmol()
+    if viewer == "rich" and vendor is None:
+        raise FileNotFoundError(
+            f"viewer='rich' requires the vendored library at {VENDOR_3DMOL}")
+    run["_viewer_mode"] = "light" if vendor is None else viewer
+    run["_vendor_available"] = vendor is not None
+    run["_rich_emitted"] = 0
 
     disease = ((run.get("disease") or {}).get("disease") or {})
     heading = title or (
@@ -1889,6 +2079,14 @@ def build(run_dir: str | Path, out_path: str | Path, title: str | None = None) -
             f'derived from them is a finding.</div>'
         )
 
+    # Inline the library only when a rich viewer was actually emitted, so a
+    # run with nothing to show in 3-D does not carry half a megabyte.
+    vendor_block = ""
+    if vendor and run.get("_rich_emitted"):
+        vendor_block = (
+            "<!-- 3Dmol.js, BSD-3-Clause, vendored: see scripts/vendor/VERSION.json -->"
+            f"<script>{vendor}</script>")
+
     nav = "".join(
         f'<a href="#{sid}">{esc(label)}</a>' for sid, label, _ in sections
     )
@@ -1919,6 +2117,7 @@ exists for any epitope shown.</p>
 </main>
 <div id="tip" role="tooltip"></div>
 <script>{JS}</script>
+{vendor_block}
 </body></html>
 """
     out_path = Path(out_path)
@@ -1928,6 +2127,8 @@ exists for any epitope shown.</p>
     return {
         "out": str(out_path),
         "bytes": out_path.stat().st_size,
+        "viewer_mode": run.get("_viewer_mode"),
+        "n_rich_viewers": run.get("_rich_emitted"),
         "layers": sorted(k for k in run if not k.startswith("_")),
         "missing": missing,
         "n_sections": len(sections),
@@ -1945,9 +2146,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument("--run-dir", required=True, type=Path)
     p.add_argument("--out", type=Path, default=None)
     p.add_argument("--title", default=None)
+    p.add_argument("--viewer", choices=("auto", "rich", "light"), default="auto",
+                   help="auto (default): cartoon rendering where a structure is "
+                        "available, backbone trace otherwise; rich: require the "
+                        "vendored library; light: backbone trace only, smallest file")
     args = p.parse_args(argv)
     out = args.out or Path(f"{args.run_dir.name}_report.html")
-    result = build(args.run_dir, out, title=args.title)
+    result = build(args.run_dir, out, title=args.title, viewer=args.viewer)
     print(json.dumps(result, indent=2))
     return 0
 

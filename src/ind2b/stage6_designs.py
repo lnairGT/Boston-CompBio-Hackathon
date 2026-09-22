@@ -293,6 +293,11 @@ def read_campaign(
         }
         design["vs_requested_epitope"] = epitope_engagement(
             row.get("Interface_Target_Residues"), requested_hotspots)
+        # A campaign's accepted complex already contains just the target and
+        # the designed binder, so it needs no trimming - record its absolute
+        # location for a viewer to read.
+        if cif:
+            design["viewer_structure_abs"] = str(folder / cif)
         record["designs"].append(design)
 
     record["n_on_ladder"] = sum(
