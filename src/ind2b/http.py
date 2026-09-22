@@ -100,11 +100,30 @@ def request_json(
             log.warning("corrupt cache entry %s, refetching", path)
 
     last_status: int | None = None
+    last_error: Exception | None = None
     for attempt in range(1, max_attempts + 1):
         _throttle(url)
-        resp = session().request(
-            method, url, params=params, json=json_body, timeout=timeout
-        )
+        try:
+            resp = session().request(
+                method, url, params=params, json=json_body, timeout=timeout
+            )
+        except (
+            requests.ConnectionError,   # includes ProxyError
+            requests.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+        ) as exc:
+            # Transport-level failures are transient far more often than not:
+            # a dropped proxy connection mid-run should cost a retry, not the
+            # whole stage. Status-code retries alone do not cover these.
+            last_error = exc
+            sleep_s = min(2 ** attempt, 30)
+            log.warning(
+                "%s -> %s (attempt %d/%d), sleeping %.1fs",
+                url, type(exc).__name__, attempt, max_attempts, sleep_s,
+            )
+            time.sleep(sleep_s)
+            continue
+
         if resp.status_code in RETRY_STATUS:
             last_status = resp.status_code
             sleep_s = min(2 ** attempt, 30)
@@ -127,23 +146,65 @@ def request_json(
             path.write_text(json.dumps(data))
         return data
 
+    if last_error is not None:
+        raise RuntimeError(
+            f"{url} unreachable after {max_attempts} attempts: "
+            f"{type(last_error).__name__}: {last_error}"
+        ) from last_error
     raise RuntimeError(
         f"{url} kept returning {last_status} after {max_attempts} attempts"
     )
 
 
-def download(url: str, dest: Path, *, use_cache: bool = True, timeout: int = 120) -> Path:
-    """Download a file to ``dest``, skipping an existing non-empty copy."""
+def download(
+    url: str,
+    dest: Path,
+    *,
+    use_cache: bool = True,
+    timeout: int = 120,
+    max_attempts: int = 4,
+) -> Path:
+    """Download a file to ``dest``, skipping an existing non-empty copy.
+
+    Writes to a ``.part`` file and renames on completion, so an interrupted
+    download never leaves a truncated structure that a later run would treat
+    as cached.
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
     if use_cache and dest.exists() and dest.stat().st_size > 0:
         return dest
-    _throttle(url)
-    with session().get(url, stream=True, timeout=timeout) as resp:
-        resp.raise_for_status()
+
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        _throttle(url)
         tmp = dest.with_suffix(dest.suffix + ".part")
-        with tmp.open("wb") as fh:
-            for chunk in resp.iter_content(chunk_size=1 << 16):
-                if chunk:
-                    fh.write(chunk)
-        tmp.replace(dest)
-    return dest
+        try:
+            with session().get(url, stream=True, timeout=timeout) as resp:
+                resp.raise_for_status()
+                with tmp.open("wb") as fh:
+                    for chunk in resp.iter_content(chunk_size=1 << 16):
+                        if chunk:
+                            fh.write(chunk)
+            tmp.replace(dest)
+            return dest
+        except (
+            requests.ConnectionError,
+            requests.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+        ) as exc:
+            last_error = exc
+            tmp.unlink(missing_ok=True)
+            sleep_s = min(2 ** attempt, 30)
+            log.warning(
+                "download %s -> %s (attempt %d/%d), sleeping %.1fs",
+                url, type(exc).__name__, attempt, max_attempts, sleep_s,
+            )
+            time.sleep(sleep_s)
+        except requests.HTTPError:
+            tmp.unlink(missing_ok=True)
+            raise
+
+    raise RuntimeError(
+        f"{url} download failed after {max_attempts} attempts: "
+        f"{type(last_error).__name__}: {last_error}"
+    ) from last_error
