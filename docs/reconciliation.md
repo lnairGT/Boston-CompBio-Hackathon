@@ -68,6 +68,10 @@ I first wrote that our two antibody filters were complementary and should be com
   chaperone regexes are only used to *label* the rejected chains for the audit trail.
 
 An allowlist keyed to known interactors is the stronger design and mine adds nothing to it.
+
+> **Unreviewed.** This comparison is my own reading of her code. The verification lane declined to
+> check it and said so explicitly, so it carries no independent confirmation — unlike the
+> `target_chains[0]` finding below, where review corrected me.
 `ind2b` also has an insight I did not: **one epitope per partner chain, not per entry**, because
 a target contacting two partners at once yields a composite interface of several thousand square
 ångström that no single mini-binder reproduces. That is a real constraint on what is designable
@@ -90,11 +94,29 @@ in our own candidate set do:
 1IAR  P24394 -> chain  B      offsets {B: +25}           single chain, no ambiguity
 ```
 
-**To be accurate about severity: in both multi-chain cases the offsets agree, so `ind2b`'s
-current output is correct and I have not found an entry where it is wrong.** The gap is that
-nothing would tell you if they disagreed — and where copies differ in their SIFTS alignment the
-wrong pick shifts every reported residue position, which is a numbering error rather than a
-cosmetic ambiguity. It is a latent hazard, not an observed failure.
+**Corrected after independent review — the verdict held, my mechanism did not.**
+
+I first wrote that the offsets "happen to agree", so her output is correct by luck, and that a
+disagreeing offset would shift every reported residue position. That is wrong.
+`auth_to_uniprot` builds the map **per chain**, from that chain's own author-id list, for the
+chain that is then analysed — so a disagreeing offset **could not** shift the reported positions.
+Her code is *structurally* safe here, not accidentally safe. Describing a colleague's code as
+luckily correct when it is correct by construction is a costly kind of wrong.
+
+The gap at `target_chains[0]` is still real, but it is a different gap:
+
+1. **Copy selection.** If the chosen copy is not the one a given partner engages,
+   `interface_residues` returns empty and the record is rejected with a stated reason — a
+   *visible false negative*, an epitope lost rather than a wrong epitope.
+2. **Under-sampling**, the quieter case: a less complete or differently packed copy yields a
+   narrower accepted epitope that still clears `MIN_BURIED_AREA`, and nothing flags it. This one
+   is **reasoned from her gates, not demonstrated** — no real entry was found where copy `[0]`
+   gives a materially narrower interface than its sibling.
+3. **Unmapped chains fail safe**: an empty map yields `status='rejected'` rather than author
+   positions presented as canonical.
+
+Suggested fix, unchanged and small: record `target_chains_available` alongside `target_chain` so
+a reader can see the copy choice was arbitrary. **No change to the numbering path is warranted.**
 
 Suggested minimal change, in the spirit of the existing code: when `len(target_chains) > 1`,
 build the numbering map for each, and either record `alternative_chains` with their offsets on
