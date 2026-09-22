@@ -13,8 +13,11 @@ pipeline, because "this indication has no accessible target" is a result, not a 
 from __future__ import annotations
 
 import argparse
+import builtins
 import json
+import os
 import sys
+from typing import Any
 
 from .contracts import Budgets
 from .agent.loop import AgentLoop, start_run
@@ -33,17 +36,40 @@ OUTCOME_NOTES = {
 
 
 def _make_llm(model: str | None):
-    """Prefer the in-kernel bridge when running inside Claude Science, else the API."""
-    try:  # pragma: no cover - environment-dependent
-        host = __builtins__["host"] if isinstance(__builtins__, dict) else __builtins__.host  # type: ignore[attr-defined]
+    """Prefer the in-kernel bridge when running inside Claude Science, else the API.
+
+    Both failure modes are reported as something the reader can act on. A bare
+    ``ModuleNotFoundError: anthropic`` tells a scientist nothing about what to do next.
+    """
+    host = getattr(builtins, "host", None)
+    if host is not None:  # pragma: no cover - only true inside Claude Science
         from .agent.loop import HostLLMClient
         return HostLLMClient(host, model=model)
-    except Exception:
+
+    try:
         from .agent.loop import AnthropicClient
+    except ImportError as exc:  # pragma: no cover
+        raise SystemExit(
+            "The agent loop needs an LLM client and none is available.\n"
+            "  Running outside Claude Science? install the SDK:  pip install anthropic\n"
+            "  Then provide a key:                               export ANTHROPIC_API_KEY=...\n"
+            f"(underlying error: {exc})"
+        ) from exc
+
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise SystemExit(
+            "ANTHROPIC_API_KEY is not set, so the agent cannot run.\n"
+            "  export ANTHROPIC_API_KEY=...   (on Modal, supply it as a Secret)\n"
+            "Inside Claude Science no key is needed; the in-kernel bridge is used instead."
+        )
+    try:
         return AnthropicClient(model=model or "claude-sonnet-4-5")
+    except Exception as exc:
+        raise SystemExit(f"Could not construct the Anthropic client: {exc}") from exc
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, llm: Any = None) -> int:
+    """``llm`` lets a host process inject its own client; the CLI resolves one otherwise."""
     p = argparse.ArgumentParser(prog="e2b", description="Indication-agnostic evidence-to-binder investigation.")
     p.add_argument("indication", help="Free text. Any indication; it is resolved at runtime.")
     p.add_argument("--desired-effect", default=None, help="The biological outcome you want.")
@@ -65,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
         max_paid_design_batches=1 if args.allow_design else 0,
     )
     loop, store = start_run(
-        args.indication, llm=_make_llm(args.model), desired_effect=args.desired_effect,
+        args.indication, llm=llm or _make_llm(args.model), desired_effect=args.desired_effect,
         moa=args.moa, modality=args.modality, budgets=budgets, root=args.runs_dir)
 
     result = loop.run(verbose=True)

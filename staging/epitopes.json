@@ -1,0 +1,204 @@
+{
+  "P24394": {
+    "gene_symbol": "IL4R",
+    "accession": "P24394",
+    "epitope_defined_on": {
+      "pdb_id": "1IAR",
+      "chain": "B",
+      "partner": {
+        "A": "IL4_HUMAN"
+      },
+      "partner_is_biologically_relevant": true
+    },
+    "design_against": {
+      "pdb_id": "8K4Q",
+      "chain": "A",
+      "reason": "same UniProt span, zero unresolved breaks"
+    },
+    "hotspot_residues_author": [
+      "A127",
+      "A41",
+      "A70",
+      "A69",
+      "A67",
+      "A125",
+      "A183",
+      "A71"
+    ],
+    "hotspot_residues_uniprot": [
+      152,
+      66,
+      95,
+      94,
+      92,
+      150,
+      208,
+      96
+    ],
+    "hotspot_numbering": "pdb_author",
+    "chain_resolved_by": "SIFTS accession->chain (e2b.adapters.structures.chain_for_accession)",
+    "residue_detail": [
+      {
+        "author_residue": 127,
+        "insertion_code": null,
+        "residue_name": "TYR",
+        "atom_contacts": 110,
+        "uniprot_residue": 152
+      },
+      {
+        "author_residue": 41,
+        "insertion_code": null,
+        "residue_name": "PHE",
+        "atom_contacts": 53,
+        "uniprot_residue": 66
+      },
+      {
+        "author_residue": 70,
+        "insertion_code": null,
+        "residue_name": "SER",
+        "atom_contacts": 49,
+        "uniprot_residue": 95
+      },
+      {
+        "author_residue": 69,
+        "insertion_code": null,
+        "residue_name": "VAL",
+        "atom_contacts": 48,
+        "uniprot_residue": 94
+      },
+      {
+        "author_residue": 67,
+        "insertion_code": null,
+        "residue_name": "ASP",
+        "atom_contacts": 39,
+        "uniprot_residue": 92
+      },
+      {
+        "author_residue": 125,
+        "insertion_code": null,
+        "residue_name": "ASP",
+        "atom_contacts": 39,
+        "uniprot_residue": 150
+      },
+      {
+        "author_residue": 183,
+        "insertion_code": null,
+        "residue_name": "TYR",
+        "atom_contacts": 29,
+        "uniprot_residue": 208
+      },
+      {
+        "author_residue": 71,
+        "insertion_code": null,
+        "residue_name": "ALA",
+        "atom_contacts": 22,
+        "uniprot_residue": 96
+      }
+    ],
+    "method": "Heavy-atom contacts within 5.0 A between chain B and ['A'] in deposited entry 1IAR, ranked by contact count. Contact count indicates interface involvement; it is NOT a measured binding energy and these are not thermodynamic hotspots."
+  },
+  "P35225": {
+    "gene_symbol": "IL13",
+    "accession": "P35225",
+    "epitope_defined_on": {
+      "pdb_id": "5E4E",
+      "chain": "A",
+      "partner": {
+        "B": "IL4RA_HUMAN",
+        "C": "I13R1_HUMAN"
+      },
+      "partner_is_biologically_relevant": true
+    },
+    "design_against": {
+      "pdb_id": "5E4E",
+      "chain": "A",
+      "reason": "signalling ternary complex; epitope and coordinates from the same entry"
+    },
+    "hotspot_residues_author": [
+      "A104",
+      "A65",
+      "A12",
+      "A89",
+      "A101",
+      "A107",
+      "A108",
+      "A91"
+    ],
+    "hotspot_residues_uniprot": [
+      137,
+      98,
+      45,
+      122,
+      134,
+      140,
+      141,
+      124
+    ],
+    "hotspot_numbering": "pdb_author",
+    "chain_resolved_by": "SIFTS accession->chain (e2b.adapters.structures.chain_for_accession)",
+    "residue_detail": [
+      {
+        "author_residue": 104,
+        "insertion_code": null,
+        "residue_name": "ARG",
+        "atom_contacts": 102,
+        "uniprot_residue": 137
+      },
+      {
+        "author_residue": 65,
+        "insertion_code": null,
+        "residue_name": "ARG",
+        "atom_contacts": 96,
+        "uniprot_residue": 98
+      },
+      {
+        "author_residue": 12,
+        "insertion_code": null,
+        "residue_name": "GLU",
+        "atom_contacts": 79,
+        "uniprot_residue": 45
+      },
+      {
+        "author_residue": 89,
+        "insertion_code": null,
+        "residue_name": "LYS",
+        "atom_contacts": 55,
+        "uniprot_residue": 122
+      },
+      {
+        "author_residue": 101,
+        "insertion_code": null,
+        "residue_name": "PHE",
+        "atom_contacts": 54,
+        "uniprot_residue": 134
+      },
+      {
+        "author_residue": 107,
+        "insertion_code": null,
+        "residue_name": "PHE",
+        "atom_contacts": 50,
+        "uniprot_residue": 140
+      },
+      {
+        "author_residue": 108,
+        "insertion_code": null,
+        "residue_name": "ARG",
+        "atom_contacts": 43,
+        "uniprot_residue": 141
+      },
+      {
+        "author_residue": 91,
+        "insertion_code": null,
+        "residue_name": "GLU",
+        "atom_contacts": 42,
+        "uniprot_residue": 124
+      }
+    ],
+    "method": "Heavy-atom contacts within 5.0 A between chain A and ['B', 'C'] in deposited entry 5E4E, ranked by contact count. Contact count indicates interface involvement; it is NOT a measured binding energy and these are not thermodynamic hotspots.",
+    "excluded_entries": {
+      "3L5X": "antibody Fab complex (H/L unmapped) - epitope is the antibody footprint",
+      "4I77": "antibody Fab complex (H/L unmapped)",
+      "3LB6": "IL13RA2 decoy receptor, not the signalling type II receptor"
+    }
+  }
+}
