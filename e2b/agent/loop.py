@@ -45,6 +45,8 @@ TOOL_TO_STAGE: dict[str, str] = {
     "submit_design": "design_run",
     "get_run": "design_run",
     "evaluate_candidates": "design_run",
+    "triage_candidates": "report",
+    "plan_experiments": "report",
 }
 
 SYSTEM_PROMPT = """You are the investigation agent in an evidence-to-binder workflow for drug \
