@@ -396,14 +396,55 @@ def pdb_uniprot_mapping(pdb_id: str) -> dict[str, Any]:
                 "offset_to_uniprot": offset,
             }
             accessions.setdefault(acc, []).append(chain)
+
+    # One accession can map to SEVERAL chains in an entry -- 8K4Q maps P24394 to both A and
+    # C. `accessions` has always exposed that, but a caller has to go looking, and
+    # chain_for_accession() returns a single chain. A signal a caller can miss is not a
+    # signal, so multiplicity is surfaced as warnings and alternative_chains here.
+    #
+    # The offsets happening to agree between copies is a property of a given entry, not a
+    # guarantee, so the two cases are reported differently: agreeing offsets are an
+    # ambiguity about WHICH COPY to design against, disagreeing offsets additionally make
+    # the numbering wrong if the wrong chain is used.
+    multiplicity: dict[str, dict[str, Any]] = {}
+    mapping_warnings: list[str] = []
+    for acc, chs in accessions.items():
+        if len(chs) < 2:
+            continue
+        offsets = {c: chains[c].get("offset_to_uniprot") for c in chs}
+        distinct = {o for o in offsets.values() if o is not None}
+        multiplicity[acc] = {"chains": sorted(chs), "offsets": offsets,
+                             "offsets_agree": len(distinct) <= 1}
+        if len(distinct) <= 1:
+            mapping_warnings.append(
+                f"{acc} maps to {len(chs)} chains in {pdb_id.upper()}: {sorted(chs)}. They share "
+                f"offset {next(iter(distinct), None)}, so numbering is unaffected, but WHICH COPY "
+                "to design against is ambiguous and should be chosen deliberately."
+            )
+        else:
+            mapping_warnings.append(
+                f"{acc} maps to {len(chs)} chains in {pdb_id.upper()} with DIFFERENT offsets "
+                f"{offsets}. Residue numbering depends on which chain is used; picking the wrong "
+                "one shifts every position."
+            )
+    for acc, chs in accessions.items():
+        for c in chs:
+            chains[c]["alternative_chains"] = [x for x in chs if x != c]
     if not chains:
         raise StructureAdapterError(f"SIFTS returned no UniProt mapping for {pdb_id}.")
     return {"pdb_id": pdb_id.upper(), "chains": chains, "accessions": accessions,
+            "multiple_chains_per_accession": multiplicity,
+            "warnings": mapping_warnings or None,
             "source": "PDBe SIFTS", "retrieved_at": utcnow().isoformat()}
 
 
 def chain_for_accession(pdb_id: str, accession: str) -> tuple[str | None, dict[str, Any]]:
-    """Which chain of this entry is the requested protein? Never guess 'A'."""
+    """Which chain of this entry is the requested protein? Never guess 'A'.
+
+    When the accession maps to several chains the FIRST is returned, but the mapping
+    carries ``warnings`` and each chain carries ``alternative_chains``, so the caller
+    cannot silently design against an arbitrary copy without the ambiguity being visible.
+    """
     mapping = pdb_uniprot_mapping(pdb_id)
     chains = mapping["accessions"].get(accession) or []
     return (chains[0] if chains else None), mapping
