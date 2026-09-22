@@ -30,6 +30,23 @@ from .tools import ToolRegistry
 
 MAX_STEPS_HARD_CEILING = 60
 
+# The UI names stages, not tools, so that a tool rename does not change what a scientist
+# sees. An unmapped tool falls through to its own name and the UI renders it verbatim
+# rather than forcing it into the list.
+TOOL_TO_STAGE: dict[str, str] = {
+    "resolve_indication": "resolve_indication",
+    "discover_targets": "gather_targets",
+    "get_target_evidence": "assess_targets",
+    "assess_structure": "structure_and_site",
+    "summarize_cell_context": "cellular_context",
+    "discover_census_embeddings": "cellular_context",
+    "explore_cell_neighborhoods": "cellular_context",
+    "compare_targets": "rank_targets",
+    "submit_design": "design_run",
+    "get_run": "design_run",
+    "evaluate_candidates": "design_run",
+}
+
 SYSTEM_PROMPT = """You are the investigation agent in an evidence-to-binder workflow for drug \
 discovery. A scientist gives you an indication and a desired mechanism of action; you decide \
 which target to recommend, why, and whether a protein-binder design job is justified.
@@ -132,11 +149,16 @@ class AnthropicClient:
 
 
 class AgentLoop:
-    def __init__(self, llm: LLMClient, store: RunStore, registry: ToolRegistry | None = None):
+    def __init__(self, llm: LLMClient, store: RunStore, registry: ToolRegistry | None = None,
+                 publish: "Callable[[], None] | None" = None):
         self.llm = llm
         self.store = store
         self.registry = registry or ToolRegistry(store=store)
         self.transcript: list[dict[str, Any]] = []
+        # Optional callback invoked after every tool call, so a UI can show partial
+        # results while the investigation is still running. A publish failure must never
+        # take down the run: the science is the product, the display is not.
+        self.publish = publish
 
     # -- observation ----------------------------------------------------------------
 
@@ -234,7 +256,9 @@ class AgentLoop:
                 reason = _nearest_reason(texts) or f"step {step}: {name}"
                 result, action = self.registry.call(name, args, reason=reason, step=step)
                 self.store.log_action(action)
-                self.store.set_stage(name)
+                self.store.set_stage(TOOL_TO_STAGE.get(name, name))
+                if self.publish is not None:
+                    self.publish()  # stream records to the UI as they are produced
                 if verbose:
                     self.transcript.append({
                         "step": step, "kind": "tool_call", "tool": name,
