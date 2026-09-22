@@ -57,9 +57,16 @@ class ToolSpec:
 
 
 def _optional(module_path: str) -> Any | None:
-    """Import a lane's adapter if it has landed, else None."""
+    """Import a lane's module if it has landed, else None.
+
+    ``package`` must be THIS module's package (``e2b.agent``) so that ``..analysis``
+    resolves to ``e2b.analysis``. Passing ``"e2b"`` walks above the top-level package and
+    fails for every module -- which looks identical to "the lane has not landed", so the
+    modules stay invisible after they arrive. Silent, and only visible as a capability
+    that never turns on.
+    """
     try:
-        return importlib.import_module(module_path, package="e2b")
+        return importlib.import_module(module_path, package=__package__)
     except Exception:
         return None
 
@@ -347,6 +354,44 @@ class ToolRegistry:
         ))
 
         self._add(ToolSpec(
+            name="triage_candidates",
+            description=(
+                "Deterministic developability and specificity triage over the candidates of a completed "
+                "design run: sequence liabilities, interface-metric interpretation, and paralogue "
+                "epitope cross-reactivity risk. Requires real candidates; it will refuse to rate "
+                "sequences it was not given. Verdicts are conventions, not calibrated predictions."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "string"},
+                    "run_paralog_analysis": {"type": "boolean", "default": True},
+                },
+                "required": ["run_id"],
+            },
+            handler=self._triage_candidates,
+        ))
+
+        self._add(ToolSpec(
+            name="plan_experiments",
+            description=(
+                "Derive a wet-lab plan to test the recommendation: production route, assay concepts with "
+                "controls, construct liabilities and decision criteria, from the target's own biology. "
+                "Works without a candidate sequence (returns a partial plan and says so) and refuses "
+                "when target biology could not be retrieved."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "target_id": {"type": "string", "description": "Ensembl gene ID of the chosen target."},
+                    "run_id": {"type": "string", "description": "Optional design run to draw a candidate from."},
+                },
+                "required": ["target_id"],
+            },
+            handler=self._plan_experiments,
+        ))
+
+        self._add(ToolSpec(
             name="get_run",
             description="Poll a design run: status, stage, error and artifact references. Cheap; not budget-counted.",
             input_schema={"type": "object", "properties": {"run_id": {"type": "string"}}, "required": ["run_id"]},
@@ -565,6 +610,94 @@ class ToolRegistry:
         self.store.record_design_run(request, out)
         self.store.run.budgets.paid_design_batches_used += 1
         return out
+
+    def _triage_candidates(self, run_id: str, run_paralog_analysis: bool = True) -> dict[str, Any]:
+        analysis = _optional("..analysis")
+        if analysis is None:
+            return {"status": "capability_unavailable", "capability": "downstream_analysis",
+                    "error": "e2b/analysis has not landed in this build."}
+        cands = self.store.candidates.get(run_id) or []
+        if not cands:
+            # Refusing is the honest answer. Triaging nothing, or triaging a fixture, would
+            # produce developability numbers that look like results and are not.
+            return {
+                "status": "no_candidates",
+                "run_id": run_id,
+                "error": "This run has produced no candidates, so there is nothing to triage.",
+                "interpretation": "Not a failure of the triage module, and NOT evidence that the "
+                                  "candidates were poor. Do not report developability numbers.",
+            }
+        region = self.store.binding_regions.get(run_id) or {}
+        report = analysis.triage_candidates(
+            [c.model_dump() if hasattr(c, "model_dump") else c for c in cands],
+            target_accession=region.get("accession"),
+            epitope_residues=region.get("uniprot_residues"),
+            ensembl_gene_id=region.get("ensembl_gene_id"),
+            run_paralog_analysis=run_paralog_analysis,
+        )
+        self.store.record_triage(run_id, report)
+        return {
+            "status": "ok", "run_id": run_id,
+            "n_candidates": len(cands),
+            "triage_version": report.get("triage_version"),
+            "contains_only_fixtures": report.get("contains_only_fixtures"),
+            "verdicts": [{"candidate_id": r.get("candidate_id"), "verdict": r.get("verdict"),
+                          "drivers": (r.get("drivers") or [])[:3]} for r in (report.get("rows") or [])][:20],
+            "epitope_is_proxy": (report.get("epitope") or {}).get("is_proxy"),
+            "caveat": "Verdicts are conventions chosen for this rubric version and are not calibrated "
+                      "against experimental outcomes.",
+        }
+
+    def _plan_experiments(self, target_id: str, run_id: str | None = None) -> dict[str, Any]:
+        exp = _optional("..experiments")
+        if exp is None:
+            return {"status": "capability_unavailable", "capability": "experimental_design",
+                    "error": "e2b/experiments has not landed in this build."}
+        target = self.store.targets.get(target_id)
+        if target is None:
+            raise PreconditionFailed(f"Target '{target_id}' is not in this run's pool.")
+        cands = self.store.candidates.get(run_id or "") or []
+        acc = target.protein_accession
+        struct_info = self.store.structures.get(acc or "") or {}
+        try:
+            plan = exp.plan_experiments(
+                self.store.brief, target, cands[0] if cands else None,
+                protein=struct_info.get("protein"),
+                accessibility=struct_info.get("accessibility"),
+                paralogs=(self.store.triage.get(run_id or "") or {}).get("paralog_members"),
+                pathway_hints=[e.object_id for e in self.store.evidence.get(target_id, [])
+                               if e.evidence_type == "affected_pathway"][:8],
+                cell_context=self.store.cell_summaries or None,
+                fetch=not struct_info,
+            )
+        except Exception as exc:
+            if type(exc).__name__ == "TargetBiologyUnavailable":
+                return {"status": "blocked_no_target_biology", "error": str(exc),
+                        "interpretation": "Target biology could not be retrieved. This is a source "
+                                          "failure, not evidence that the target lacks an ectodomain."}
+            raise
+        self.store.record_experiment_plan(target_id, plan)
+        return {
+            "status": "ok", "target": target.gene_symbol, "plan_status": plan.get("status"),
+            "plan_id": plan.get("plan_id"),
+            "production_routes": [
+                {"host": r.get("expression_host"), "qc_gates": len(r.get("qc_gates") or []),
+                 "risks": len(r.get("risks") or [])}
+                for r in (plan.get("production_routes") or [])
+            ][:4],
+            "assays": [
+                {"title": a.get("title"), "reports": a.get("reports"),
+                 "does_not_report": a.get("does_not_report"), "controls": len(a.get("controls") or [])}
+                for a in (plan.get("assays") or [])
+            ][:8],
+            "n_controls": sum(len(a.get("controls") or []) for a in (plan.get("assays") or [])),
+            "decision_tree": plan.get("decision_tree"),
+            "missing_inputs": plan.get("missing_inputs"),
+            "provisional_claims": plan.get("provisional_claims"),
+            "what_this_does_not_establish": plan.get("what_this_does_not_establish"),
+            "note": "A plan without a candidate sequence is partial by design; the construct-liability "
+                    "screen is skipped rather than invented.",
+        }
 
     def _get_run(self, run_id: str) -> dict[str, Any]:
         if self.design is None:

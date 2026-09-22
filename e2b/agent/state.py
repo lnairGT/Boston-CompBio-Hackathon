@@ -58,6 +58,10 @@ class RunStore:
         self.comparison: ComparisonResult | None = None
         self.design_requests: dict[str, DesignRequest] = {}
         self.design_runs: dict[str, DesignRun] = {}
+        self.candidates: dict[str, list[Any]] = {}
+        self.binding_regions: dict[str, dict[str, Any]] = {}
+        self.triage: dict[str, dict[str, Any]] = {}
+        self.experiment_plans: dict[str, dict[str, Any]] = {}
         self.provenance: list[Provenance] = []
 
         self.graph = G.EvidenceGraph()
@@ -178,6 +182,39 @@ class RunStore:
                 self.graph.add_relation(cs.target_id, "expressed_in", pop, evidence_ids=[ev.evidence_id],
                                         claim_class="computed_measurement")
         self._flush("cell_summaries.json", [json.loads(c.model_dump_json()) for c in self.cell_summaries])
+
+    def record_candidates(self, run_id: str, candidates: list[Any],
+                          binding_region: dict[str, Any] | None = None) -> None:
+        """Attach real design output to its run. Fixtures are rejected here, not downstream."""
+        real = []
+        for cand in candidates:
+            origin = getattr(cand, "origin", None) or (cand.get("origin") if isinstance(cand, dict) else None)
+            if origin == "fixture":
+                # A fixture may never reach triage, a ranking, or a report. Dropping it here
+                # means no downstream module has to defend against it.
+                continue
+            real.append(cand)
+        self.candidates[run_id] = real
+        if binding_region:
+            self.binding_regions[run_id] = binding_region
+        for cand in real:
+            cid = getattr(cand, "candidate_id", None) or (cand.get("candidate_id") if isinstance(cand, dict) else None)
+            if not cid:
+                continue
+            self.graph.add_node(cid, "Candidate", cid, run_id=run_id)
+            self.graph.add_relation(cid, "candidate_generated_by", run_id if run_id in self.graph.nodes
+                                    else self.graph.add_node(run_id, "DesignRun", run_id),
+                                    claim_class="structural")
+        self._flush(f"candidates_{run_id}.json",
+                    [c.model_dump() if hasattr(c, "model_dump") else c for c in real])
+
+    def record_triage(self, run_id: str, report: dict[str, Any]) -> None:
+        self.triage[run_id] = report
+        self._flush(f"triage_{run_id}.json", report)
+
+    def record_experiment_plan(self, target_id: str, plan: dict[str, Any]) -> None:
+        self.experiment_plans[target_id] = plan
+        self._flush(f"experiment_plan_{target_id}.json", plan)
 
     # -- derived --------------------------------------------------------------------
 
