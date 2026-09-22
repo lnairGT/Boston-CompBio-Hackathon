@@ -86,6 +86,15 @@ LIABILITY_PENALTY_CAP = 0.20
 TEXT_MINED_DATATYPES: frozenset[str] = frozenset({"literature"})
 LITERATURE_ONLY_RATING_CAP = "moderate"
 
+# Baseline expression in healthy tissue is not disease context. When the Census has no
+# diseased slice for an indication -- atopic dermatitis has none in skin -- a reference-only
+# summary still shows the target is present in the mechanism-relevant populations, which is
+# real and useful, but it cannot show disease-associated change. Cap rather than discard.
+REFERENCE_CONDITION_LABELS: frozenset[str] = frozenset(
+    {"normal", "healthy", "reference", "control", "na", "unspecified", ""}
+)
+REFERENCE_ONLY_RATING_CAP = "moderate"
+
 # Thresholds mapping a raw Open Targets datatype score to an ordinal rating. These are
 # the rubric's only numeric cut-points and they are versioned with it.
 OT_SCORE_TO_STRENGTH: list[tuple[float, str]] = [

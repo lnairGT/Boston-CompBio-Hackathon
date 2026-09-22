@@ -26,6 +26,8 @@ from ..config import (
     LIABILITY_PENALTY_CAP,
     LIABILITY_PENALTY_PER_ITEM,
     LITERATURE_ONLY_RATING_CAP,
+    REFERENCE_CONDITION_LABELS,
+    REFERENCE_ONLY_RATING_CAP,
     RUBRIC_VERSION,
     STRENGTH_POINTS,
     TEXT_MINED_DATATYPES,
@@ -459,6 +461,24 @@ def _rate_cellular(
     else:
         rating = "unknown"
 
+    # Baseline expression in healthy tissue is NOT disease context. It says the target is
+    # present in the mechanism-relevant populations; it says nothing about whether the
+    # disease changes it. Many indications simply have no diseased tissue in the Census --
+    # atopic dermatitis has none in skin -- and in that case the honest ceiling is
+    # 'moderate', with the gap named. Silently rating baseline data as disease context
+    # would let an absent contrast masquerade as a positive finding.
+    conditions = {(c.condition or "").strip().lower() for c in mine}
+    disease_matched = any(cond not in REFERENCE_CONDITION_LABELS for cond in conditions)
+    reference_only_note = None
+    if not disease_matched and rating == "strong":
+        rating = REFERENCE_ONLY_RATING_CAP
+        reference_only_note = (
+            f"Capped at '{REFERENCE_ONLY_RATING_CAP}': every retrieved cell summary is from "
+            f"reference/normal tissue ({sorted(conditions)}), so this measures baseline presence in "
+            f"the relevant populations, not disease-associated change. No diseased-tissue slice was "
+            f"available for this indication."
+        )
+
     return CriterionRating(
         criterion="cellular_context",
         rating=rating,
@@ -466,9 +486,11 @@ def _rate_cellular(
         missingness=None if rating != "unknown" else "Expression measured as zero in all sampled populations.",
         rationale=(
             f"Peak {mine[0].expression_metric} of {peak:.3f} across {len(mine)} population summary(ies), "
-            f"{n_donors} donor(s). "
+            f"{n_donors} donor(s), condition(s) {sorted(conditions)}. "
             + ("Single donor, so rated no higher than weak. " if n_donors < 2 else "")
-            + "RNA expression is not surface protein abundance."
+            + (reference_only_note + " " if reference_only_note else "")
+            + "RNA expression is not surface protein abundance, and undetected expression is not "
+              "proof of absence."
         ),
     )
 
