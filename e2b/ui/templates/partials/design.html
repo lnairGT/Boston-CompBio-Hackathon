@@ -1,0 +1,101 @@
+{% import "macros.html" as m %}
+{% set d = v.design %}
+<section class="card" id="design">
+  <h2>4 · Design</h2>
+  {% if not d.exists %}
+    <p class="nodata">No target has been selected and no design request exists. Select a
+       target in the Compare section first.</p>
+  {% else %}
+
+  <div class="kv">
+    <div><span class="k">Selected target</span>
+      <span class="val big">{{ d.gene_symbol or d.selected_target_id or 'none selected' }}</span></div>
+    <div><span class="k">Modality</span><span class="val">{{ d.modality }}</span></div>
+    <div><span class="k">Structure</span>
+      <span class="val">{{ d.structure_id or 'none' }}
+        {% if d.structure_version %}<span class="tiny muted">({{ d.structure_version }})</span>{% endif %}</span></div>
+    <div><span class="k">Design request</span>
+      <span class="val">{{ d.design_id or 'not prepared' }}
+        {% if d.review_status %}<span class="pill pill-{{ d.review_status }}">{{ d.review_status }}</span>{% endif %}</span></div>
+  </div>
+
+  <h3>Binding site</h3>
+  {% if d.region %}
+    <p>{{ d.region.description }} — chain <code>{{ d.region.chain }}</code>,
+       {{ d.region.residues | length }} residues, numbering {{ d.region.numbering }}</p>
+    <p class="tiny">hotspots: <span class="mono">{{ d.region.hotspots | join(', ') or 'none recorded' }}</span></p>
+    <p class="rationale"><strong>Why this site could produce the intended mechanism:</strong>
+       {{ d.region.rationale }}</p>
+  {% else %}
+    <p class="nodata">No binding region has been proposed. A design cannot launch without one.</p>
+  {% endif %}
+
+  {% if d.moa_rationale %}
+  <p class="rationale"><strong>MoA rationale:</strong> {{ d.moa_rationale }}</p>
+  {% endif %}
+  {% if d.evidence_ids %}
+  <p class="tiny">Justified by evidence:
+    {% for e in d.evidence_ids %}<code>{{ e }}</code>{{ ', ' if not loop.last }}{% endfor %}</p>
+  {% else %}
+  <p class="tiny warn">No evidence identifiers are linked to this request.</p>
+  {% endif %}
+
+  <h3>Launch control</h3>
+  {% if d.problems %}
+  <div class="banner banner-warn">
+    <strong>Not launchable yet:</strong>
+    <ul>{% for p in d.problems %}<li>{{ p }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+  {% if d.blocked_by_feasibility %}
+  <div class="banner banner-bad">
+    <strong>Blocked on design feasibility:</strong>
+    <ul>{% for p in d.blocked_by_feasibility %}<li>{{ p }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+  {% if not has_launcher %}
+  <div class="banner banner-note">
+    No design execution route is attached to this UI process. The control below will refuse
+    and spend nothing.
+  </div>
+  {% endif %}
+
+  <form method="post" action="/run/{{ v.run_key }}/confirm" class="inline" data-once>
+    <label class="checkline">
+      <input type="checkbox" name="confirm" value="yes" {{ 'checked' if d.inputs_confirmed }}
+             onchange="this.form.submit()">
+      I have read the target, site and rationale above and confirm these inputs.
+    </label>
+  </form>
+
+  <form method="post" action="/run/{{ v.run_key }}/launch" data-once>
+    <input type="hidden" name="launch_token" value="{{ launch_token or '' }}">
+    <button type="submit" class="launch" {{ '' if (d.can_launch and launch_token) else 'disabled' }}>
+      Launch design run
+    </button>
+    {% if not d.can_launch %}<span class="tiny muted">{{ d.launch_reason }}</span>{% endif %}
+    <p class="tiny muted">One-shot token. A second click, a refresh or a back-button resubmit
+       returns the same outcome and cannot start a second paid run.</p>
+  </form>
+
+  {% if d.ticket %}
+  <div class="banner banner-{{ 'ok' if d.ticket.outcome == 'launched' else 'warn' }}">
+    <strong>{{ d.ticket.outcome }}</strong> at {{ d.ticket.at }} — {{ d.ticket.message }}
+  </div>
+  {% endif %}
+
+  <h3>Job status</h3>
+  {% with job = d.job %}{% include "partials/job_status.html" %}{% endwith %}
+
+  <details class="prov">
+    <summary>Request detail</summary>
+    <dl>
+      <dt>Input hash</dt><dd class="mono">{{ d.input_hash or 'not computed' }}</dd>
+      <dt>Sequence checksum</dt><dd class="mono">{{ d.sequence_checksum or 'absent' }}</dd>
+      <dt>Designs requested</dt><dd>{{ d.n_designs if d.n_designs is not none else 'not set' }}</dd>
+      <dt>Model</dt><dd>{{ d.model_name or 'not set' }}</dd>
+      <dt>Model config</dt><dd class="mono">{{ d.model_config }}</dd>
+    </dl>
+  </details>
+  {% endif %}
+</section>

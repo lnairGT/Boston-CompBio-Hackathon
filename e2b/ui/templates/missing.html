@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>No such run</h1>
+  <p>There is no run <code>{{ run_key }}</code> in this process. The UI keeps run state in
+     memory only, so a restart clears it; the spine holds the durable record.</p>
+  <p><a href="/">Start a brief</a> or load a fixture scenario:</p>
+  <ul class="scenarios">
+  {% for s in scenarios %}<li><a href="/fixtures/{{ s.key }}"><code>{{ s.key }}</code></a> — {{ s.description }}</li>{% endfor %}
+  </ul>
+</section>
+{% endblock %}

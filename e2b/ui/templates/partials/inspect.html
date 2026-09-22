@@ -1,0 +1,122 @@
+{% import "macros.html" as m %}
+{% set i = v.inspect %}
+<section class="card" id="inspect">
+  <h2>3 · Inspect</h2>
+  {% if not i.exists %}
+    <p class="nodata">No evidence, cellular context or source failures have been recorded for
+       this run.</p>
+  {% else %}
+
+  {% if i.failures %}
+  <h3>Source status</h3>
+  <table class="grid">
+    <thead><tr><th>Source</th><th>What happened</th><th>What it means</th><th>When</th></tr></thead>
+    <tbody>
+    {% for f in i.failures %}
+      <tr class="{{ 'row-warn' if not f.is_absence_evidence }}">
+        <td><code>{{ f.source }}</code></td>
+        <td>{{ f.kind }}{% if f.detail %}<br><span class="tiny muted">{{ f.detail }}</span>{% endif %}</td>
+        <td class="tiny">{{ f.meaning }}{% if f.query %}<br><span class="mono tiny">{{ f.query }}</span>{% endif %}</td>
+        <td class="tiny">{{ f.at }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <h3>Evidence trail <span class="tiny muted">({{ i.n_evidence }} item{{ '' if i.n_evidence == 1 else 's' }})</span></h3>
+  {% if not i.groups %}
+    <p class="nodata">No evidence items were retrieved.</p>
+  {% endif %}
+  {% for g in i.groups %}
+  <details class="evgroup" open>
+    <summary><strong>{{ g.gene_symbol }}</strong> — {{ g.n }} item(s)
+      <span class="tiny muted">from {{ g.sources | join(', ') }}</span></summary>
+    {% for e in g.records %}
+    <div class="ev dir-{{ e.direction }}">
+      <div class="ev-head">
+        <span class="pill pill-{{ e.direction }}">{{ e.direction }}</span>
+        <span class="pill">{{ e.evidence_type }}</span>
+        {{ m.badge(e.badge) }}
+        <code class="tiny">{{ e.evidence_id }}</code>
+      </div>
+      <p class="triple mono">{{ e.triple }}</p>
+      {% if e.excerpt %}<blockquote>{{ e.excerpt }}</blockquote>{% endif %}
+      <p class="tiny">
+        source <strong>{{ e.source }}</strong>
+        {% if e.source_url %} · <a href="{{ e.source_url }}" rel="noreferrer noopener" target="_blank">open source</a>{% endif %}
+        {% if e.doi %} · DOI <a href="https://doi.org/{{ e.doi }}" rel="noreferrer noopener" target="_blank">{{ e.doi }}</a>{% endif %}
+        {% if e.locator %} · <span class="mono">{{ e.locator }}</span>{% endif %}
+        · retrieved {{ e.retrieved_at }}
+      </p>
+      <p class="tiny">disease scope: <strong>{{ e.disease_scope }}</strong>
+        {% if e.scope_disease_id %}(<code>{{ e.scope_disease_id }}</code>){% endif %}
+        {% if e.scope_warning %}<span class="warn"> — {{ e.scope_warning }}</span>{% endif %}</p>
+      {% if e.limitations %}
+      <ul class="tiny muted">{% for l in e.limitations %}<li>{{ l }}</li>{% endfor %}</ul>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </details>
+  {% endfor %}
+
+  <h3>Cellular context</h3>
+  {% if not i.cell_summaries %}
+    <p class="nodata">No cell-level summary is attached to this run. That is an absence of
+       retrieval, not an observation of absent expression.</p>
+  {% endif %}
+  {% for cs in i.cell_summaries %}
+  <div class="cellsum">
+    <h4>{{ cs.population }} {{ m.badge(cs.badge) }}</h4>
+    <p class="tiny">{{ cs.tissue or 'tissue not stated' }} ·
+       {{ cs.condition or 'condition not stated' }} ·
+       Census release <code>{{ cs.census_release }}</code> ·
+       donors {{ m.numval(cs.n_donors) }} · cells {{ m.numval(cs.cell_counts) }}</p>
+    <p class="tiny">metric <code>{{ cs.metric }}</code> — {{ cs.method }}</p>
+    <table class="grid">
+      <thead><tr><th>Donor</th><th>Value</th><th>Cells</th></tr></thead>
+      <tbody>
+      {% for d in cs.per_donor %}
+        <tr><td class="mono">{{ d.donor }}</td><td>{{ m.numval(d.value) }}</td>
+            <td>{{ m.numval(d.cells) }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if cs.original_labels %}
+    <p class="tiny muted">Original labels harmonised: {{ cs.original_labels | join(', ') }}</p>
+    {% endif %}
+    <p class="tiny muted">{{ cs.primary_data_handling }}</p>
+    {% if cs.limitations %}
+    <ul class="tiny">{% for l in cs.limitations %}<li>{{ l }}</li>{% endfor %}</ul>
+    {% endif %}
+    {{ m.prov(cs.provenance, 'Census provenance') }}
+  </div>
+  {% endfor %}
+
+  {% if i.neighborhoods %}
+  <h3>Neighbourhood context</h3>
+  {% for n in i.neighborhoods %}
+  <div class="cellsum">
+    <p><strong>{{ n.query_population }}</strong> · k={{ n.k }} · {{ n.n_neighbors }} neighbours</p>
+    <p class="tiny">search universe: <strong>{{ n.reference_universe }}</strong> ·
+       metric {{ n.metric }} · distances {{ n.distance_range }}</p>
+    <p class="tiny muted">{{ n.preprocessing }}</p>
+    <ul class="tiny">{% for c in n.caveats %}<li>{{ c }}</li>{% endfor %}</ul>
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  <details class="prov">
+    <summary>Graph relationships ({{ i.graph_edges | length }} edges)</summary>
+    <table class="grid">
+      <thead><tr><th>Relationship</th><th>Direction</th><th>Type</th><th>Origin</th></tr></thead>
+      <tbody>
+      {% for g in i.graph_edges %}
+        <tr><td class="mono tiny">{{ g.triple }}</td><td>{{ g.direction }}</td>
+            <td>{{ g.type }}</td><td>{{ m.badge(g.badge) }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+</section>

@@ -1,0 +1,82 @@
+{% import "macros.html" as m %}
+{% set b = v.brief %}
+<section class="card" id="brief">
+  <h2>1 · Brief</h2>
+  {% if not b.exists %}
+    <p class="nodata">No brief has been attached to this run.</p>
+    {% include "partials/brief_form.html" %}
+  {% else %}
+  <div class="kv">
+    <div><span class="k">You asked for</span>
+         <span class="val big">{{ b.raw_indication }}</span> {{ m.badge(b.badge) }}</div>
+    <div><span class="k">Desired effect</span>
+         <span class="val">{{ b.desired_effect or 'not stated' }}</span></div>
+    <div><span class="k">Direction</span>
+         <span class="val">{{ b.moa or 'not stated' }}</span></div>
+    <div><span class="k">Modality</span>
+         <span class="val">{{ b.modality }}</span></div>
+    <div><span class="k">Species</span>
+         <span class="val">{{ b.species }} ({{ b.species_taxon_id }})</span></div>
+  </div>
+
+  <h3>Resolved disease identity</h3>
+  {% if b.resolution_state == 'unresolved' %}
+    <p class="nodata">The free-text indication has <strong>not</strong> been resolved to an
+       ontology term. No term was guessed. Nothing downstream can run on an unresolved brief.</p>
+  {% else %}
+    {% if b.resolved_disease_id %}
+    <p class="resolved">
+      <code>{{ b.resolved_disease_id }}</code> — <strong>{{ b.resolved_disease_label }}</strong>
+      <span class="pill pill-{{ b.status }}">{{ b.status }}</span>
+    </p>
+    {% else %}
+    <p class="nodata">Candidates were returned but none has been selected yet.</p>
+    {% endif %}
+
+    {% if b.ambiguous or b.resolution_candidates|length > 1 %}
+    <div class="ambiguity">
+      {% if b.status == 'confirmed' %}
+      <p><strong>{{ b.resolution_candidates|length }} terms matched</strong> this indication;
+         the one above is in use because it was chosen, not because it was assumed. Change it
+         here if it is the wrong term.</p>
+      {% else %}
+      <p><strong>Resolution is uncertain.</strong> {{ b.resolution_candidates|length }} terms
+         match. Choose the one you mean — the run uses your choice, not a silent default.</p>
+      {% endif %}
+      <form method="post" action="/run/{{ v.run_key }}/disease" data-once>
+        <table class="grid">
+          <thead><tr><th></th><th>Term</th><th>Label</th><th>Match</th><th>Score</th></tr></thead>
+          <tbody>
+          {% for c in b.resolution_candidates %}
+            <tr class="{{ 'row-selected' if c.selected }}">
+              <td><input type="radio" name="disease_id" value="{{ c.disease_id }}"
+                     {{ 'checked' if c.selected }}></td>
+              <td><code>{{ c.disease_id }}</code></td>
+              <td>{{ c.label }}{% if c.description %}<br><span class="tiny muted">{{ c.description }}</span>{% endif %}</td>
+              <td>{{ c.match_type }}</td>
+              <td>{{ m.numval(c.score) }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        <button type="submit">Use the selected term</button>
+      </form>
+    </div>
+    {% endif %}
+
+    {% if b.resolution_rationale %}
+    <p class="tiny muted">{{ b.resolution_rationale }}</p>
+    {% endif %}
+  {% endif %}
+
+  <details class="prov">
+    <summary>Census disease mapping and provenance</summary>
+    <dl>
+      <dt>Census label</dt><dd>{{ b.census_label or 'not mapped — Open Targets and Census strings are not assumed identical' }}</dd>
+      <dt>Census ontology id</dt><dd>{{ b.census_ontology_id or 'not mapped' }}</dd>
+    </dl>
+    {{ m.prov(b.census_mapping, 'Mapping provenance') }}
+    {{ m.prov(b.provenance, 'Brief provenance') }}
+  </details>
+  {% endif %}
+</section>

@@ -1,0 +1,110 @@
+{% import "macros.html" as m %}
+{% set c = v.compare %}
+<section class="card" id="compare">
+  <h2>2 · Compare</h2>
+  {% if not c.exists %}
+    <p class="nodata">No targets have been assessed for this brief yet. Nothing is ranked, and
+       no placeholder ordering is shown.</p>
+  {% else %}
+
+  {% if c.insufficient_evidence %}
+  <div class="banner banner-warn">
+    <strong>Insufficient evidence to choose.</strong> The comparison declined to name a winner.
+    {% if c.explanation %}<br>{{ c.explanation }}{% endif %}
+  </div>
+  {% endif %}
+
+  {% if c.ties %}
+  <div class="banner banner-note"><strong>Ties.</strong>
+    {% for g in c.ties %}<div>{{ g | join(' = ') }}</div>{% endfor %}
+    Tied targets are shown as tied. The rubric does not break them.
+  </div>
+  {% endif %}
+
+  <p class="tiny muted">Showing {{ c.n_shown }} of {{ c.n_assessed }} assessed target(s).
+     Rubric {{ c.rubric_version }}. {{ c.score_caveat }}</p>
+
+  <div class="cards">
+  {% for t in c.cards %}
+    <article class="tcard {{ 'tcard-selected' if t.selected }}">
+      <header>
+        <span class="rank">#{{ t.rank }}</span>
+        <h3>{{ t.gene_symbol }} {{ m.badge(t.badge) }}</h3>
+        <p class="tiny muted">{{ t.approved_name or 'name not retrieved' }} ·
+           <code>{{ t.target_id }}</code>
+           {% if t.protein_accession %} · UniProt <code>{{ t.protein_accession }}</code>{% endif %}</p>
+        <p class="score">rubric score {{ m.numval(t.score) }}</p>
+        {% if t.tied_with %}<p class="tiny warn">tied with {{ t.tied_with | join(', ') }}</p>{% endif %}
+      </header>
+
+      <h4>Biological support</h4>
+      <table class="crit">
+        <tbody>
+        {% for cr in t.criteria %}
+          <tr>
+            <td class="crit-name">{{ cr.label }}
+              <span class="tiny muted">weight {{ cr.weight }}</span></td>
+            <td>{{ m.rating(cr) }}</td>
+            <td class="tiny">
+              {% if cr.is_gap %}<span class="gap">gap — {{ cr.missingness }}</span>
+              {% else %}{{ cr.rationale or '' }}
+                <span class="muted">({{ cr.evidence_count }} evidence item{{ '' if cr.evidence_count == 1 else 's' }})</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% if not t.criteria %}<p class="nodata">No criteria were rated for this target.</p>{% endif %}
+
+      <h4>Gaps and liabilities</h4>
+      {% if t.gaps %}
+        <p class="tiny"><strong>Unrated criteria:</strong>
+           {{ t.gaps | map(attribute='label') | join(', ') }} — no evidence retrieved, which is
+           not the same as evidence of absence.</p>
+      {% else %}<p class="tiny muted">Every criterion has retrieved evidence behind it.</p>{% endif %}
+      {% if t.liabilities %}
+        <ul class="liab">{% for l in t.liabilities %}<li>{{ l }}</li>{% endfor %}</ul>
+      {% else %}<p class="tiny muted">No liabilities recorded.</p>{% endif %}
+      <p class="tiny">Direction of modulation: <strong>{{ t.direction_compatibility }}</strong></p>
+
+      <h4 class="sep">Design feasibility <span class="tiny muted">— separate from biological support</span></h4>
+      {% if t.feasibility %}
+      <div class="feas">
+        <p><span class="rating {{ t.feasibility.css }}">{{ t.feasibility.rating_text }}</span></p>
+        <p class="tiny"><span class="rating {{ t.feasibility.access_css }}">{{ t.feasibility.access_text }}</span></p>
+        {% if t.feasibility.localization_basis %}
+        <ul class="tiny">{% for b in t.feasibility.localization_basis %}<li>{{ b }}</li>{% endfor %}</ul>
+        {% endif %}
+        <p class="tiny">{{ t.feasibility.structure_text }}</p>
+        {% if t.feasibility.blocking_reasons %}
+        <ul class="tiny bad">{% for b in t.feasibility.blocking_reasons %}<li>{{ b }}</li>{% endfor %}</ul>
+        {% endif %}
+      </div>
+      {% else %}<p class="nodata tiny">Design feasibility was not assessed.</p>{% endif %}
+
+      <form method="post" action="/run/{{ v.run_key }}/select" data-once>
+        <input type="hidden" name="target_id" value="{{ t.target_id }}">
+        <button type="submit" class="secondary">
+          {{ 'Selected for design' if t.selected else 'Select for design' }}</button>
+      </form>
+
+      {{ m.prov(t.provenance, 'Target provenance') }}
+    </article>
+  {% endfor %}
+  </div>
+
+  {% if c.excluded %}
+  <h3>Excluded</h3>
+  <ul class="excl">
+  {% for e in c.excluded %}<li><strong>{{ e.gene_symbol }}</strong> — {{ e.reason }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+
+  <details class="prov">
+    <summary>Candidate pool scope</summary>
+    <pre class="mono">{{ c.pool_scope }}</pre>
+    {% if c.explanation %}<p>{{ c.explanation }}</p>{% endif %}
+  </details>
+  {% endif %}
+</section>

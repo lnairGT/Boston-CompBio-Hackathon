@@ -1,0 +1,99 @@
+{
+  "_readme": [
+    "FIXTURE FILE. Self-test inputs only. Nothing in this file is read by the production",
+    "path: e2b/experiments/*.py contains no accession, gene, disease or dataset identifier,",
+    "and plan_experiments() never opens this file. It exists so the three topology branches",
+    "of the planner can be exercised against REAL, live UniProt records.",
+    "",
+    "The three accessions were chosen for TOPOLOGY CLASS, not for any indication: one",
+    "secreted protein, one single-pass surface receptor, one cytosolic enzyme. The briefs",
+    "here are test briefs. The candidate is NOT a design: it is a synthetic string used to",
+    "exercise the construct-liability screen, and it is labelled origin='fixture'. No design",
+    "metric, score or affinity is attached to it anywhere."
+  ],
+  "targets": [
+    {
+      "label": "secreted-protein branch",
+      "expect_archetype": "secreted_ligand",
+      "target": {
+        "target_id": "SELFTEST-A",
+        "gene_symbol": "SELFTEST-A",
+        "stable_gene_id": "SELFTEST-A",
+        "protein_accession": "P35225"
+      },
+      "pathway_hints": [
+        "JAK-STAT signalling downstream of a type-2 cytokine receptor complex"
+      ]
+    },
+    {
+      "label": "cell-surface-receptor branch",
+      "expect_archetype": "cell_surface_receptor",
+      "target": {
+        "target_id": "SELFTEST-B",
+        "gene_symbol": "SELFTEST-B",
+        "stable_gene_id": "SELFTEST-B",
+        "protein_accession": "P24394"
+      },
+      "pathway_hints": [
+        "cytokine receptor subunit alpha; JAK-STAT signal transduction"
+      ]
+    },
+    {
+      "label": "cytosolic-target branch (must be refused)",
+      "expect_archetype": "not_accessible_to_soluble_binder",
+      "target": {
+        "target_id": "SELFTEST-C",
+        "gene_symbol": "SELFTEST-C",
+        "stable_gene_id": "SELFTEST-C",
+        "protein_accession": "Q07343"
+      },
+      "pathway_hints": [
+        "cyclic-nucleotide phosphodiesterase activity"
+      ]
+    }
+  ],
+  "briefs": [
+    {
+      "brief_id": "SELFTEST-BRIEF-1",
+      "raw_indication": "test indication one",
+      "desired_effect": "suppress the pathway the target drives",
+      "moa": "antagonise",
+      "modality": "de novo minibinder",
+      "species": "homo_sapiens"
+    },
+    {
+      "brief_id": "SELFTEST-BRIEF-2",
+      "raw_indication": "test indication two",
+      "desired_effect": "restore signalling through the pathway by blocking the target",
+      "moa": "antagonise",
+      "modality": "de novo minibinder",
+      "species": "homo_sapiens"
+    }
+  ],
+  "candidate_fixture": {
+    "candidate_id": "FIXTURE-CONSTRUCT-QC-VECTOR-1",
+    "run_id": "FIXTURE-RUN-0",
+    "origin": "fixture",
+    "_what_this_is": [
+      "NOT a design and NOT a biological result. A synthetic amino-acid string whose only",
+      "purpose is to exercise the construct-liability screen: it contains exactly one",
+      "cysteine (so the free-thiol branch fires) and one N-X-S/T sequon (so the",
+      "glycosylation-sequon branch fires). It carries no metrics, because none exist."
+    ],
+    "sequence": "SLEELKKRAEELAKKAEELLNKSLELAKRHNPEIAKEVLELAKKAQELCEKAKELLEKGNK"
+  },
+  "paralog_fixture": [
+    {
+      "gene_symbol": "FIXTURE-PARALOG-1",
+      "accession": "FIXTURE-1",
+      "identity_over_engaged_region": null,
+      "_note": "fixture panel member; identity is null because it was not computed here"
+    },
+    {
+      "gene_symbol": "FIXTURE-PARALOG-2",
+      "accession": "FIXTURE-2",
+      "identity_over_engaged_region": null,
+      "_note": "fixture panel member; identity is null because it was not computed here"
+    }
+  ]
+}

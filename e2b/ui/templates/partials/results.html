@@ -1,0 +1,103 @@
+{% import "macros.html" as m %}
+{% set r = v.results %}
+<section class="card" id="results">
+  <h2>5 · Results</h2>
+
+  {% if r.status == 'no_data' %}
+    <p class="nodata">No design run has produced results for this brief. Nothing is shown
+       because nothing exists — this is not a statement that no binder is possible.</p>
+  {% elif r.status == 'pending' %}
+    <div class="banner banner-note"><strong>Design run in progress.</strong>
+      Stage <strong>{{ r.job.stage }}</strong>, last update {{ r.job.updated }}.
+      Results appear here only when the executor reports them.</div>
+  {% elif r.status in ('failed', 'timed_out', 'cancelled') %}
+    <div class="banner banner-bad">
+      <strong>Design run {{ r.status }}.</strong> {{ r.job.text }}
+      {% if r.job.error %}<br><span class="mono tiny">{{ r.job.error }}</span>{% endif %}
+      <br>No candidates are shown because none were produced.
+      <br>An execution failure says nothing about whether the target is designable.
+    </div>
+  {% elif r.status == 'succeeded_no_candidates' %}
+    <div class="banner banner-warn"><strong>The run completed and returned no candidates.</strong>
+      This is a real empty result for the request as issued.</div>
+  {% endif %}
+
+  {% if r.job.replay %}
+  <div class="banner banner-note">{{ r.job.replay_note }}</div>
+  {% endif %}
+
+  {% for c in r.candidates %}
+  <article class="cand">
+    <header>
+      <h3>{{ c.candidate_id }} {{ m.badge(c.badge) }}
+        <span class="pill pill-{{ c.evaluation_status }}">{{ c.evaluation_status }}</span></h3>
+      <p class="tiny muted">{{ c.modality }} · run <code>{{ c.run_id }}</code>
+         {% if c.target_id %} · target <code>{{ c.target_id }}</code>{% endif %}</p>
+    </header>
+
+    <h4>Sequence</h4>
+    {% if c.sequence_present %}
+      <pre class="seq mono">{{ c.sequence }}</pre>
+      <p class="tiny">length {{ m.numval(c.length) }} residues</p>
+    {% else %}
+      <p class="nodata">{{ c.sequence_note }}</p>
+    {% endif %}
+
+    <h4>Structure</h4>
+    {% if c.structure_ref %}
+      <p class="mono tiny">{{ c.structure_ref }}</p>
+    {% else %}
+      <p class="nodata">{{ c.structure_note }}</p>
+    {% endif %}
+
+    <h4>Model scores</h4>
+    {% if c.metrics %}
+    <table class="grid">
+      <thead><tr><th>Score</th><th>Value</th><th>Direction</th><th>Model</th></tr></thead>
+      <tbody>
+      {% for mt in c.metrics %}
+        <tr>
+          <td>{{ mt.name }}<br><span class="tiny muted">{{ mt.interpretation or '' }}</span></td>
+          <td>{{ m.numval(mt.value) }}</td>
+          <td class="tiny">{{ mt.direction }}</td>
+          <td class="tiny">{{ mt.model }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="tiny warn">These are computational model scores. None of them is a measured
+       binding affinity, a Kd or an IC50.</p>
+    {% else %}
+      <p class="nodata">No metrics were returned for this candidate.</p>
+    {% endif %}
+
+    {% if c.limitations %}
+    <h4>Limitations</h4>
+    <ul class="tiny">{% for l in c.limitations %}<li>{{ l }}</li>{% endfor %}</ul>
+    {% endif %}
+  </article>
+  {% endfor %}
+
+  {% if r.metric_definitions %}
+  <h3>Metric definitions</h3>
+  <table class="grid">
+    <thead><tr><th>Score</th><th>How it was produced</th><th>Merit</th><th>Caveat</th></tr></thead>
+    <tbody>
+    {% for d in r.metric_definitions %}
+      <tr><td>{{ d.name }}</td><td class="tiny">{{ d.method }} <span class="muted">({{ d.model }})</span></td>
+          <td class="tiny">{{ d.direction }}</td><td class="tiny">{{ d.disclaimer }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <h3>Limitations</h3>
+  <ul>{% for l in r.limitations %}<li>{{ l }}</li>{% endfor %}</ul>
+
+  <h3>Proposed next experimental test</h3>
+  {% if r.next_tests %}
+  <ol>{% for t in r.next_tests %}<li>{{ t }}</li>{% endfor %}</ol>
+  {% else %}
+  <p class="nodata">{{ r.next_tests_note }}</p>
+  {% endif %}
+</section>

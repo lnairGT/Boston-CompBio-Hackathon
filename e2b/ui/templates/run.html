@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% import "macros.html" as m %}
+{% block title %}{{ v.brief.raw_indication if v.brief.exists else v.run_key }} · evidence to binder{% endblock %}
+{% block topnav %}
+  <a href="#brief">Brief</a><a href="#compare">Compare</a><a href="#inspect">Inspect</a>
+  <a href="#design">Design</a><a href="#results">Results</a>
+{% endblock %}
+{% block content %}
+
+{% if v.is_fixture_run %}
+<div class="banner banner-fixture">
+  <strong>Fixture run.</strong> Every record below is a hand-written interface stand-in
+  (<span class="badge origin-fixture">fixture</span>). Nothing here was retrieved from a
+  source or produced by a model, and none of it is a biological result.
+  {% if v.scenario_label %}<br><span class="muted">{{ v.scenario_label }}</span>{% endif %}
+</div>
+{% elif v.origins_present | selectattr('label', 'equalto', 'fixture') | list %}
+<div class="banner banner-mixed">
+  <strong>Mixed origins.</strong> This run contains fixture records alongside real ones.
+  Each card carries its own origin badge — read them.
+</div>
+{% endif %}
+
+{% if v.notice %}<div class="banner banner-note">{{ v.notice }}</div>{% endif %}
+
+{% include "partials/stage.html" %}
+{% include "partials/brief.html" %}
+{% include "partials/compare.html" %}
+{% include "partials/inspect.html" %}
+{% include "partials/design.html" %}
+{% include "partials/results.html" %}
+
+<p class="muted tiny">Run key <code>{{ v.run_key }}</code> · state last changed {{ v.updated }} ·
+   rendered {{ v.now }} · rubric {{ v.rubric_version }} ·
+   <a href="/run/{{ v.run_key }}/state.json">view this page as JSON</a></p>
+{% endblock %}

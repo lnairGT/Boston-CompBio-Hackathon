@@ -1,0 +1,29 @@
+{% import "macros.html" as m %}
+<div class="job {{ job.css }}" id="jobstatus" data-state="{{ job.state or 'none' }}"
+     data-terminal="{{ '1' if (not job.exists or job.is_terminal) else '0' }}">
+  {% if not job.exists %}
+    <p class="nodata">{{ job.text }}</p>
+  {% else %}
+  <div class="job-head">
+    <span class="jobstate">{{ job.state }}</span>
+    {{ m.badge(job.badge) }}
+    <code class="tiny">{{ job.run_id }}</code>
+  </div>
+  <p>{{ job.text }}</p>
+  {% if job.replay_note %}<p class="warn">{{ job.replay_note }}</p>{% endif %}
+  <dl class="jobdl">
+    <dt>Stage reported</dt><dd>{{ job.stage }}</dd>
+    <dt>Execution route</dt><dd class="mono">{{ job.route }}</dd>
+    {% if job.handle %}<dt>Handle</dt><dd class="mono">{{ job.handle }}</dd>{% endif %}
+    <dt>Started</dt><dd>{{ job.started }}</dd>
+    <dt>Last update</dt><dd>{{ job.updated }}{% if job.age %} <span class="muted">({{ job.age }})</span>{% endif %}</dd>
+    <dt>Finished</dt><dd>{{ job.finished }}</dd>
+    {% if job.model %}<dt>Model</dt><dd>{{ job.model }} {{ job.model_version or '' }}</dd>{% endif %}
+    {% if job.seed is not none %}<dt>Seed</dt><dd>{{ job.seed }}</dd>{% endif %}
+    <dt>Cost</dt><dd>{{ m.numval(job.cost) }}</dd>
+  </dl>
+  {% if job.error %}<p class="bad"><strong>Error:</strong> {{ job.error }}</p>{% endif %}
+  <p class="tiny muted">Stage name and timestamps come from the executor. No completion
+     percentage is shown because the executor does not report one.</p>
+  {% endif %}
+</div>

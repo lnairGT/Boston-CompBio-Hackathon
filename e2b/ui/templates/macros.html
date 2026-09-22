@@ -1,0 +1,29 @@
+{% macro badge(b) -%}
+{%- if b -%}<span class="badge {{ b.css }}" title="{{ b.tooltip }}">{{ b.label }}</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro numval(n) -%}
+{%- if n.known -%}<span class="num">{{ n.text }}</span>
+{%- else -%}<span class="num missing" title="No value was recorded. This is not zero.">{{ n.text }}</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro rating(c) -%}
+<span class="rating {{ c.css }}">{{ c.rating_text }}</span>
+{%- endmacro %}
+
+{% macro prov(p, label='Provenance') -%}
+{%- if p %}
+<details class="prov">
+  <summary>{{ label }} {{ badge(p.badge) }}</summary>
+  <dl>
+    <dt>Source</dt><dd>{{ p.source }}{% if p.release %} · release {{ p.release }}{% endif %}</dd>
+    {% if p.endpoint %}<dt>Endpoint</dt><dd class="mono">{{ p.endpoint }}</dd>{% endif %}
+    {% if p.query %}<dt>Query</dt><dd><pre class="mono">{{ p.query }}</pre></dd>{% endif %}
+    {% if p.variables %}<dt>Variables</dt><dd class="mono">{{ p.variables }}</dd>{% endif %}
+    <dt>Retrieved</dt><dd>{{ p.retrieved_at }}</dd>
+    <dt>Elapsed</dt><dd>{{ numval(p.elapsed) }}</dd>
+    {% if p.notes %}<dt>Notes</dt><dd>{{ p.notes }}</dd>{% endif %}
+  </dl>
+</details>
+{%- endif %}
+{%- endmacro %}

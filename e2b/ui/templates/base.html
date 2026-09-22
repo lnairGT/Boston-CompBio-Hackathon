@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Evidence to binder{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">evidence&nbsp;→&nbsp;binder</a>
+  <span class="subtitle">CELLxGENE evidence-to-binder · review surface</span>
+  <nav class="topnav">{% block topnav %}{% endblock %}</nav>
+</header>
+<main>{% block content %}{% endblock %}</main>
+<footer class="foot">
+  <p>Every record shows its origin. <span class="badge origin-real">real</span> retrieved now ·
+     <span class="badge origin-cached">cached</span> replayed, original time shown ·
+     <span class="badge origin-fixture">fixture</span> interface stand-in, never a biological result.</p>
+  <p>Model scores on this page are computational predictions. None of them is a measured
+     binding affinity, and a designed minibinder is not an antibody.</p>
+</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

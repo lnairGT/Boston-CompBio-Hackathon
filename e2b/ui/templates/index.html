@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>Start a brief</h1>
+  <p class="lede">Describe the indication and the effect you want in your own words. Nothing
+     here is restricted to a preset list — presets only prefill the boxes.</p>
+  {% include "partials/brief_form.html" %}
+</section>
+
+<section class="card">
+  <h2>Fixture scenarios</h2>
+  <p class="lede">Every one of these is <span class="badge origin-fixture">fixture</span> data.
+     They exist to make each interface state walkable, including the failure states.</p>
+  <ul class="scenarios">
+  {% for s in scenarios %}
+    <li><a href="/fixtures/{{ s.key }}"><code>{{ s.key }}</code></a> — {{ s.description }}</li>
+  {% endfor %}
+  </ul>
+</section>
+
+{% if runs %}
+<section class="card">
+  <h2>Runs in this process</h2>
+  <ul class="runs">
+  {% for r in runs %}
+    <li><a href="/run/{{ r.run_key }}">{{ r.run_key }}</a>
+      {% if r.scenario_label %}<span class="muted">— {{ r.scenario_label }}</span>{% endif %}</li>
+  {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% endblock %}

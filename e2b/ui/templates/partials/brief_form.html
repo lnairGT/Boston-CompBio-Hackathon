@@ -1,0 +1,45 @@
+<form class="briefform" method="post" action="/brief" data-once>
+  <label for="raw_indication">Indication, in your words</label>
+  <input id="raw_indication" name="raw_indication" required
+         placeholder="e.g. atopic dermatitis" autocomplete="off">
+
+  <label for="desired_effect">Desired effect / mechanism</label>
+  <input id="desired_effect" name="desired_effect"
+         placeholder="e.g. suppress type 2 inflammatory signalling" autocomplete="off">
+
+  <div class="row">
+    <div>
+      <label for="moa">Direction</label>
+      <input id="moa" name="moa" placeholder="e.g. antagonise" autocomplete="off">
+    </div>
+    <div>
+      <label for="modality">Modality</label>
+      <input id="modality" name="modality" placeholder="e.g. de novo minibinder" autocomplete="off">
+    </div>
+    <div>
+      <label for="species_taxon_id">Species taxon</label>
+      <input id="species_taxon_id" name="species_taxon_id" value="NCBITaxon:9606">
+    </div>
+  </div>
+
+  <button type="submit">Resolve this brief</button>
+  {% if not has_resolver %}
+  <p class="warn">No indication resolver is attached to this process. A brief submitted now
+     will be created <em>unresolved</em> and the page will say so — the UI will not guess an
+     ontology term.</p>
+  {% endif %}
+</form>
+
+{% if presets %}
+<details class="prov">
+  <summary>Demo presets (prefill only — they never restrict what you can type)</summary>
+  <ul class="presets">
+  {% for p in presets %}
+    <li><button type="button" class="linkish" data-preset
+        data-raw="{{ p.raw_indication }}" data-effect="{{ p.desired_effect }}"
+        data-moa="{{ p.moa }}" data-modality="{{ p.modality }}">{{ p.raw_indication }}</button>
+        <span class="muted">— {{ p.desired_effect }}</span></li>
+  {% endfor %}
+  </ul>
+</details>
+{% endif %}

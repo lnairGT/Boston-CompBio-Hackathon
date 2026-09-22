@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+runs/
+targets/
+*.pdb
+*.cif
+*.h5ad
+*.tgz
+.DS_Store
+._*

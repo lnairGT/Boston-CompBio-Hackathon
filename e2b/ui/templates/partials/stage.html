@@ -1,0 +1,49 @@
+{% import "macros.html" as m %}
+{% set s = v.stage %}
+<section class="card stage" id="stage">
+  <div class="stage-head">
+    <div>
+      <h2 class="nomargin">Agent stage</h2>
+      <p class="stage-now">{{ s.label }}
+        {% if s.status %}<span class="pill pill-{{ s.status }}">{{ s.status }}</span>{% endif %}
+        {% if s.outcome and s.outcome != 'in_progress' %}<span class="pill">{{ s.outcome }}</span>{% endif %}
+      </p>
+    </div>
+    <div class="stage-time">
+      <div>updated {{ s.updated }}</div>
+      {% if s.age %}<div class="muted">{{ s.age }}</div>{% endif %}
+    </div>
+  </div>
+
+  <p class="next"><strong>Next:</strong> {{ s.next }}</p>
+
+  {% if s.questions %}
+  <div class="banner banner-note">
+    <strong>Waiting on you.</strong>
+    <ul>{% for q in s.questions %}<li>{{ q }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+
+  {% if s.steps %}
+  <ol class="steps">
+    {% for st in s.steps %}<li class="step step-{{ st.state }}">{{ st.label }}</li>{% endfor %}
+  </ol>
+  <p class="tiny muted">Stage markers show which named stage the run reports it is in. There is
+     no percentage here: the run does not report one, and a synthetic bar would be a fabrication.</p>
+  {% endif %}
+
+  {% if s.budget_text %}<p class="tiny muted">Budget: {{ s.budget_text }}.</p>{% endif %}
+
+  {% if s.last_action %}
+  <details class="prov">
+    <summary>Last tool action — step {{ s.last_action.step }}: <code>{{ s.last_action.tool }}</code></summary>
+    <dl>
+      <dt>Reason</dt><dd>{{ s.last_action.reason }}</dd>
+      <dt>Result</dt><dd>{{ s.last_action.summary or 'no summary recorded' }}</dd>
+      {% if s.last_action.error %}<dt>Error</dt><dd class="bad">{{ s.last_action.error }}</dd>{% endif %}
+      <dt>Started</dt><dd>{{ s.last_action.at }}</dd>
+      <dt>Elapsed</dt><dd>{{ m.numval(s.last_action.elapsed) }}</dd>
+    </dl>
+  </details>
+  {% endif %}
+</section>

@@ -1,0 +1,25 @@
+# Pinned after a working smoke test on 2026-09-22 (Python 3.12).
+# Core spine — needed for evidence retrieval, ranking and the agent loop.
+pydantic>=2.9,<3
+requests>=2.32
+pandas>=2.2
+numpy>=1.26
+
+# Web interface (server-rendered; no build step, no npm).
+fastapi>=0.115
+uvicorn[standard]>=0.30
+jinja2>=3.1
+python-multipart>=0.0.9
+
+# Agent loop when running OUTSIDE Claude Science. Inside it, HostLLMClient is used
+# and this is unnecessary.
+anthropic>=0.40
+
+# Cellular evidence lane. cellxgene-census pulls tiledbsoma, which is a large
+# compiled dependency — install it only where the Census path actually runs
+# (the Modal CPU image and developer machines working on that lane).
+# cellxgene-census>=1.15
+
+# Remote execution. Only needed to submit design or Census jobs, not to browse
+# an existing run.
+# modal>=0.64
