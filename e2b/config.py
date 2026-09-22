@@ -200,23 +200,25 @@ def rating_from_score(score: float | None) -> str:
 
 
 def is_accessible_to_binder(locations: list[str]) -> tuple[bool | None, list[str]]:
-    """Screen subcellular locations for soluble-binder accessibility.
+    """REMOVED -- this screen was scientifically wrong and must not be revived.
 
-    Returns ``(accessible, basis)``. ``accessible`` is ``None`` when no location
-    annotation was retrieved at all -- unknown, not inaccessible.
+    It matched keywords against free-text subcellular-location strings. On live data it
+    passes PDE4A (P27815), PDE4B (Q07343) and PDE4D (Q08499) as binder-accessible, because
+    each is annotated "plasma membrane" or "apical cell membrane" while docking on the
+    CYTOPLASMIC face. PDE4D additionally has ~122 experimental structures, so a
+    structure-coverage heuristic makes it look like an excellent binder target. It is a
+    cytosolic enzyme and no soluble binder can reach it.
+
+    Use ``e2b.adapters.structures.assess_accessibility``, which decides on UniProt
+    TOPOLOGY -- signal peptide without transmembrane segment (secreted), or an explicit
+    ``Extracellular`` topological domain (ectodomain). Location strings are retained there
+    as reported context and never decide the verdict.
+
+    Kept as a raising stub rather than deleted so that reviving it is a loud failure
+    instead of a silent one.
     """
-    if not locations:
-        return None, []
-    basis: list[str] = []
-    accessible = False
-    for loc in locations:
-        low = loc.lower()
-        if any(h in low for h in ACCESSIBLE_LOCATION_HINTS):
-            if any(q in low for q in INACCESSIBLE_QUALIFIERS):
-                basis.append(f"{loc} (membrane-associated but not surface-exposed)")
-                continue
-            accessible = True
-            basis.append(f"{loc} (accessible)")
-    if not accessible:
-        basis = basis or [f"{loc} (not surface-exposed)" for loc in locations[:4]]
-    return accessible, basis
+    raise NotImplementedError(
+        "is_accessible_to_binder() was removed: keyword matching on subcellular-location "
+        "strings wrongly passes cytosolic PDE4A/PDE4B/PDE4D as binder-accessible. "
+        "Use e2b.adapters.structures.assess_accessibility (UniProt topology) instead."
+    )

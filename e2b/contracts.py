@@ -504,6 +504,25 @@ class DesignRequest(Record):
             problems.append("no evidence_ids linking the request to the evidence that justified it")
         if not self.protein_sequence_checksum:
             problems.append("no protein_sequence_checksum")
+
+        # The approval must bind to the PARAMETERS THAT WILL RUN, not merely to the record.
+        # Without this, the gate is bypassable in one line: approve a 4-design request,
+        # record its hash, then set n_designs=512 and launch. review_status still reads
+        # 'approved' and the reviewer never saw the thing that ran. Found by the evaluation
+        # lane, which is exactly the defect an independent checker is for.
+        current = self.compute_input_hash()
+        if not self.input_hash:
+            problems.append(
+                "input_hash is unset, so the approval is not bound to any specific parameters "
+                "(set input_hash = compute_input_hash() at the moment of approval)"
+            )
+        elif self.input_hash != current:
+            problems.append(
+                f"the request was MUTATED after approval: input_hash {self.input_hash[:12]}... "
+                f"was recorded but the current parameters hash to {current[:12]}.... "
+                "Re-review and re-approve; an approval does not transfer to different parameters"
+            )
+
         if problems:
             raise ValueError("DesignRequest is not launchable: " + "; ".join(problems))
 
